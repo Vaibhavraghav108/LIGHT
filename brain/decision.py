@@ -159,6 +159,7 @@ def parse_deterministic_command(text: str, state=None) -> Command | None:
         "search for",
         "search on youtube",
         "search on google",
+        "copy text",
         "copy from",
         "select from",
     }:
@@ -208,10 +209,21 @@ def parse_deterministic_command(text: str, state=None) -> Command | None:
             return Command(Action.COPY_TEXT, f"{start_phrase}|||{end_phrase}")
         raise ValueError("Both start and end phrases are required for copy-from-till.")
 
-    if text_lower.startswith(("copy from ", "select from ")):
+    if text_lower.startswith(("copy from ", "select from ", "copy text from ")):
         raise ValueError(
             "Incomplete copy-range command. Expected: 'copy from <start> till <end>'."
         )
+
+    # "Copy text <phrase>" or "Copy <phrase>"
+    copy_direct_match = re.match(
+        r"^copy(?:\s+(?:the\s+)?(?:text|sentence|paragraph|line|phrase))?\s+['\"]?(.+?)['\"]?$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if copy_direct_match:
+        phrase = copy_direct_match.group(1).strip()
+        if phrase:
+            return Command(Action.COPY_TEXT, phrase)
 
     # 5. Click Nth search result
     result_match = re.match(

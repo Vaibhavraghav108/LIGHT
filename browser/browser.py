@@ -1237,19 +1237,34 @@ class BrowserController:
             raise ValueError("Start phrase cannot be empty.")
 
         extracted = self.page.evaluate(
-            """(params) => {
+            r"""(params) => {
                 const startLow = params.start.toLowerCase();
                 const endLow = params.end.toLowerCase();
                 const fullText = document.body.innerText || '';
                 const fullLow = fullText.toLowerCase();
 
                 const startPositions = [];
+                const startLengths = [];
                 let searchPos = 0;
                 while (searchPos <= fullLow.length) {
                     const idx = fullLow.indexOf(startLow, searchPos);
                     if (idx === -1) break;
                     startPositions.push(idx);
+                    startLengths.push(params.start.length);
                     searchPos = idx + Math.max(1, startLow.length);
+                }
+
+                if (startPositions.length === 0) {
+                    const words = startLow.split(/[^a-z0-9]+/i).filter(Boolean);
+                    if (words.length > 0) {
+                        const escaped = words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+                        const rx = new RegExp(escaped.join('[\\s\\-.,;:\'"()\\[\\]]+'), 'gi');
+                        let m;
+                        while ((m = rx.exec(fullText)) !== null) {
+                            startPositions.push(m.index);
+                            startLengths.push(m[0].length);
+                        }
+                    }
                 }
 
                 if (startPositions.length === 0) {
@@ -1259,10 +1274,11 @@ class BrowserController:
                 const validRanges = [];
                 for (let i = 0; i < startPositions.length; i++) {
                     const sIdx = startPositions[i];
+                    const sLen = startLengths[i] || params.start.length;
                     if (!endLow) {
-                        validRanges.push([sIdx, sIdx + params.start.length]);
+                        validRanges.push([sIdx, sIdx + sLen]);
                     } else {
-                        const eIdx = fullLow.indexOf(endLow, sIdx + params.start.length);
+                        const eIdx = fullLow.indexOf(endLow, sIdx + sLen);
                         if (eIdx !== -1) {
                             const nextStart = (i + 1 < startPositions.length) ? startPositions[i + 1] : Infinity;
                             if (eIdx < nextStart) {
@@ -1279,7 +1295,7 @@ class BrowserController:
                     };
                 }
 
-                if (validRanges.length > 1) {
+                if (validRanges.length > 1 && endLow) {
                     return {
                         found: false,
                         reason: `Ambiguous text range: matched ${validRanges.length} passages from '${params.start}' to '${params.end}'. Please specify more words.`

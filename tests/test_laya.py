@@ -141,6 +141,17 @@ class TestLayaAndDecisions(unittest.TestCase):
         self.assertEqual(cmd_copy.action, Action.COPY_TEXT)
         self.assertEqual(cmd_copy.target, "I know this one will hurt|||demolish")
 
+        cmd_direct_copy = self.laya.understand(
+            "Copy text YouTube is an American online video streaming platform"
+        )
+        self.assertEqual(
+            cmd_direct_copy,
+            Command(
+                Action.COPY_TEXT,
+                "YouTube is an American online video streaming platform",
+            ),
+        )
+
         cmd_paste = self.laya.understand("Paste")
         self.assertEqual(cmd_paste, Command(Action.PASTE, None))
 
