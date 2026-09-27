@@ -147,7 +147,7 @@ class TestBrowserAndContextFlow(unittest.TestCase):
         mock_fallback_page.is_closed.return_value = False
         mock_fallback_browser.new_page.return_value = mock_fallback_page
 
-        def launch_side_effect(*, headless=False, executable_path=None, args=None):
+        def launch_side_effect(*, headless=False, executable_path=None, args=None, **kwargs):
             if executable_path and "brave.exe" in executable_path.lower():
                 raise PermissionError(5, "Access is denied", executable_path)
             return mock_fallback_browser
@@ -161,6 +161,21 @@ class TestBrowserAndContextFlow(unittest.TestCase):
         self.assertEqual(bc.active_browser_label, "Playwright Chromium")
         self.assertIsNone(bc.active_executable_path)
 
+    def test_search_google_falls_back_to_duckduckgo_when_google_shows_captcha(self):
+        self.mock_page.url = "https://www.google.com/sorry/index?continue=..."
+        mock_locator = MagicMock()
+        mock_locator.first.is_visible.return_value = False
+        self.mock_page.locator.return_value = mock_locator
+
+        self.browser.search_google("nature evolution")
+
+        goto_urls = [call.args[0] for call in self.mock_page.goto.call_args_list]
+        self.assertTrue(
+            any("duckduckgo.com/?q=nature+evolution" in url for url in goto_urls),
+            f"Expected DuckDuckGo fallback URL in {goto_urls}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
+

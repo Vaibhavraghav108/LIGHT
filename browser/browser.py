@@ -98,11 +98,10 @@ class BrowserController:
     def _get_launch_candidates(self) -> list[tuple[str, str | None]]:
         """
         Return ordered (label, executable_path) launch candidates:
-        1. Explicit executable_path (if provided)
-        2. Playwright-managed Chromium (executable_path=None)
-        3. Workspace-local Playwright Chromium binaries (.playwright-browsers)
-        4. Installed Google Chrome candidate paths that exist on disk
-        5. Configured Brave candidate paths as final fallback
+        - In headed mode (normal use): prefer genuine Google Chrome first (to avoid
+          Google reCAPTCHA / 'I'm not a robot' triggers on Chrome-for-Testing),
+          then Playwright Chromium, then Workspace Chromium, then Brave.
+        - In headless mode (automated tests): prefer Playwright Chromium first.
         """
         from config import get_chrome_candidate_paths, get_workspace_chromium_candidate_paths
 
@@ -113,11 +112,22 @@ class BrowserController:
             candidates.append(("Custom Browser", str(self.executable_path)))
             seen.add(str(self.executable_path))
 
-        # 1. Playwright-managed Chromium (primary default)
+        if not self.headless:
+            for path in get_chrome_candidate_paths():
+                try:
+                    if path.exists():
+                        resolved = str(path)
+                        if resolved not in seen:
+                            candidates.append(("Chrome", resolved))
+                            seen.add(resolved)
+                except OSError:
+                    continue
+
+        # Playwright-managed Chromium
         candidates.append(("Playwright Chromium", None))
         seen.add(None)
 
-        # 2. Workspace-local Playwright Chromium binaries
+        # Workspace-local Playwright Chromium binaries
         for path in get_workspace_chromium_candidate_paths():
             try:
                 if path.exists():
@@ -128,7 +138,7 @@ class BrowserController:
             except OSError:
                 continue
 
-        # 3. Installed Google Chrome
+        # Installed Google Chrome (if not already added)
         for path in get_chrome_candidate_paths():
             try:
                 if path.exists():
@@ -139,7 +149,7 @@ class BrowserController:
             except OSError:
                 continue
 
-        # 4. Brave as final fallback
+        # Brave as final fallback
         for path in get_brave_candidate_paths():
             try:
                 if path.exists():
@@ -151,6 +161,43 @@ class BrowserController:
                 continue
 
         return candidates
+
+    # ==========================================
+    # STEALTH & ANTI-BOT ("I'M NOT A ROBOT" FIX)
+    # ==========================================
+
+    def _apply_stealth(self):
+        """
+        Mask Playwright automation indicators (navigator.webdriver, missing window.chrome, etc.)
+        so Google and other websites do not trigger 'I'm not a robot' reCAPTCHA pages.
+        """
+        stealth_js = """
+        (() => {
+            try {
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+                if (!window.chrome) {
+                    window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+                }
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en']
+                });
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+            } catch (e) {}
+        })();
+        """
+        try:
+            if self.context is not None and hasattr(self.context, "add_init_script"):
+                self.context.add_init_script(stealth_js)
+            elif self.page is not None and hasattr(self.page, "add_init_script"):
+                self.page.add_init_script(stealth_js)
+            if self.page is not None and hasattr(self.page, "evaluate"):
+                self.page.evaluate(stealth_js)
+        except Exception as err:
+            log_debug(f"Stealth init script skipped: {err}")
 
     # ==========================================
     # START & CHECK BROWSER
@@ -239,21 +286,32 @@ class BrowserController:
         return False
 
     def _launch_with_candidate(self, exe_path: str | None, launch_args: list[str]):
-        """Attempt to launch browser/context with a specific executable_path (or None for Playwright Chromium)."""
+        """Attempt to launch browser/context with anti-bot stealth flags."""
         if self.user_data_dir:
             try:
-                self.context = self.playwright.chromium.launch_persistent_context(
-                    user_data_dir=str(self.user_data_dir),
-                    headless=self.headless,
-                    executable_path=exe_path,
-                    args=launch_args,
-                    no_viewport=not self.headless,
-                )
+                try:
+                    self.context = self.playwright.chromium.launch_persistent_context(
+                        user_data_dir=str(self.user_data_dir),
+                        headless=self.headless,
+                        executable_path=exe_path,
+                        args=launch_args,
+                        ignore_default_args=["--enable-automation"],
+                        no_viewport=not self.headless,
+                    )
+                except TypeError:
+                    self.context = self.playwright.chromium.launch_persistent_context(
+                        user_data_dir=str(self.user_data_dir),
+                        headless=self.headless,
+                        executable_path=exe_path,
+                        args=launch_args,
+                        no_viewport=not self.headless,
+                    )
                 self.page = (
                     self.context.pages[0]
                     if self.context.pages
                     else self.context.new_page()
                 )
+                self._apply_stealth()
                 return
             except Exception as persistent_err:
                 log_debug(
@@ -261,12 +319,21 @@ class BrowserController:
                 )
                 self.context = None
 
-        self.browser = self.playwright.chromium.launch(
-            headless=self.headless,
-            executable_path=exe_path,
-            args=launch_args,
-        )
+        try:
+            self.browser = self.playwright.chromium.launch(
+                headless=self.headless,
+                executable_path=exe_path,
+                args=launch_args,
+                ignore_default_args=["--enable-automation"],
+            )
+        except TypeError:
+            self.browser = self.playwright.chromium.launch(
+                headless=self.headless,
+                executable_path=exe_path,
+                args=launch_args,
+            )
         self.page = self.browser.new_page(no_viewport=not self.headless)
+        self._apply_stealth()
 
     def start(self):
         if self.is_active():
@@ -276,7 +343,9 @@ class BrowserController:
             self.close()
 
         self.playwright = sync_playwright().start()
-        launch_args = ["--start-maximized"] if not self.headless else []
+        launch_args = ["--disable-blink-features=AutomationControlled"]
+        if not self.headless:
+            launch_args.insert(0, "--start-maximized")
         candidates = self._get_launch_candidates()
         errors: list[str] = []
 
@@ -440,26 +509,56 @@ class BrowserController:
         self.page.goto(search_url, wait_until="domcontentloaded")
         self._unfocus_inputs()
 
+    def _is_google_captcha_page(self) -> bool:
+        try:
+            current_url = (self.page.url or "").lower()
+            if "/sorry/" in current_url or "google.com/sorry" in current_url:
+                return True
+            has_captcha = self.page.evaluate(
+                """() => Boolean(
+                    document.querySelector('#captcha-form, #recaptcha, .g-recaptcha, iframe[src*="recaptcha"]')
+                )"""
+            )
+            return bool(has_captcha)
+        except Exception:
+            return False
+
     def search_google(self, query: str):
         self.start()
         log_browser(f"Searching Google for: {query}")
 
         current_url = (self.page.url or "").lower()
-        if "google" in current_url:
-            try:
-                search_box = self.page.locator("textarea[name='q'], input[name='q']").first
-                if search_box.is_visible(timeout=2000):
-                    search_box.click()
-                    search_box.fill(query)
-                    search_box.press("Enter")
-                    self.page.wait_for_load_state("domcontentloaded")
-                    self._unfocus_inputs()
-                    return
-            except Exception as err:
-                log_debug(f"Google DOM search box fallback: {err}")
+        used_search_box = False
 
-        search_url = f"https://www.google.com/search?q={quote_plus(query)}"
-        self.page.goto(search_url, wait_until="domcontentloaded")
+        if "google." not in current_url or "/sorry/" in current_url:
+            try:
+                self.page.goto("https://www.google.com", wait_until="domcontentloaded")
+            except Exception as err:
+                log_debug(f"Initial google.com navigation fallback: {err}")
+
+        try:
+            search_box = self.page.locator("textarea[name='q'], input[name='q']").first
+            if search_box.is_visible(timeout=2500):
+                search_box.click()
+                search_box.fill(query)
+                search_box.press("Enter")
+                self.page.wait_for_load_state("domcontentloaded")
+                used_search_box = True
+        except Exception as err:
+            log_debug(f"Google DOM search box fallback: {err}")
+
+        if not used_search_box:
+            search_url = f"https://www.google.com/search?q={quote_plus(query)}"
+            self.page.goto(search_url, wait_until="domcontentloaded")
+
+        if self._is_google_captcha_page():
+            log_warning(
+                "Google triggered an 'I'm not a robot' (/sorry/) challenge. "
+                "Automatically switching this search to DuckDuckGo so your workflow is not blocked."
+            )
+            ddg_url = f"https://duckduckgo.com/?q={quote_plus(query)}&ia=web"
+            self.page.goto(ddg_url, wait_until="domcontentloaded")
+
         self._unfocus_inputs()
 
     # ==========================================
@@ -734,11 +833,13 @@ class BrowserController:
 
                 if (params.kind === 'nth_result') {
                     const url = window.location.href.toLowerCase();
-                    let selectors = 'ytd-video-renderer a#video-title, ytd-rich-item-renderer a#video-title-link, a#video-title, a#video-title-link, a[href*="/shorts/"], a:has(h3), div#search a h3, main a[href], article a[href], a[href]';
+                    let selectors = 'ytd-video-renderer a#video-title, ytd-rich-item-renderer a#video-title-link, a#video-title, a#video-title-link, a[href*="/shorts/"], a:has(h3), div#search a h3, a[data-testid="result-title-a"], article h2 a, main a[href], article a[href], a[href]';
                     if (url.includes('youtube.com')) {
                         selectors = 'ytd-video-renderer a#video-title, ytd-rich-item-renderer a#video-title-link, a#video-title, a#video-title-link, a[href*="/shorts/"]';
                     } else if (url.includes('google.com')) {
                         selectors = 'a:has(h3), div#search a h3';
+                    } else if (url.includes('duckduckgo.com')) {
+                        selectors = 'a[data-testid="result-title-a"], article h2 a, h2 a';
                     }
                     const nodes = Array.from(document.querySelectorAll(selectors)).filter(isVisible);
                     const chosen = nodes[Math.max(0, params.index - 1)];
