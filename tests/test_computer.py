@@ -134,7 +134,7 @@ class TestComputerControl(unittest.TestCase):
         self.assertEqual(executor.state.current_app, "notepad")
         mock_popen.assert_called_once_with(["notepad.exe"])
 
-    def test_executor_uses_native_browser_window_for_browser_commands(self):
+    def test_executor_uses_playwright_chromium_for_browser_commands(self):
         executor = Executor()
         executor.browser = MagicMock()
         executor.apps = MagicMock()
@@ -144,49 +144,21 @@ class TestComputerControl(unittest.TestCase):
         executor.browser.get_title.return_value = "New Tab"
         executor.screen = MagicMock()
 
-        result = executor.execute(Command(Action.OPEN_APP, "Brave"), raw_text="Open Brave")
+        result = executor.execute(Command(Action.OPEN_APP, "Chrome"), raw_text="Open Chrome")
 
         self.assertEqual(result, "OK")
-        executor.apps.open_browser_window.assert_called_once_with("Brave")
-        executor.browser.start.assert_not_called()
-        self.assertEqual(executor.state.current_browser, "brave")
+        executor.browser.start.assert_called_once_with()
+        executor.apps.open.assert_not_called()
+        self.assertEqual(executor.state.current_browser, "chrome")
 
-        executor.browser.is_active.return_value = False
         executor.execute(Command(Action.SEARCH, "Amitabh Bachchan"), raw_text="Search for Amitabh Bachchan")
-        executor.browser.search.assert_not_called()
-        executor.keyboard.hotkey.assert_called_once_with("ctrl", "l")
-        executor.keyboard.type_text.assert_called_once_with("https://www.google.com/search?q=Amitabh+Bachchan")
-        executor.keyboard.press.assert_called_once_with("enter")
+        executor.browser.search.assert_called_once_with("Amitabh Bachchan")
 
-    def test_native_browser_dom_commands_do_not_start_playwright(self):
-        executor = Executor()
-        executor.browser = BrowserController()
-        executor.browser.start = MagicMock()
-        executor.browser.click_result = MagicMock()
-        executor.browser.click_element = MagicMock()
-        executor.apps = MagicMock()
-        executor.keyboard = MagicMock()
-        executor.mouse = MagicMock()
-        executor.mouse.get_screen_size.return_value = (1920, 1080)
-        executor.screen = MagicMock()
-        executor.screen.take_screenshot.return_value = None
-        executor.state.current_browser = "brave"
+        executor.execute(Command(Action.CLICK_ELEMENT, "Think School"), raw_text="Click on Think School")
+        executor.browser.click_element.assert_called_once_with("Think School", mouse_controller=executor.mouse)
 
-        res1 = executor.execute(Command(Action.CLICK_RESULT, "1"), raw_text="Click first result")
-        self.assertEqual(res1, "OK")
-
-        res2 = executor.execute(Command(Action.CLICK_ELEMENT, "Think School"), raw_text="Click on Think School")
-        self.assertEqual(res2, "OK")
-        executor.keyboard.hotkey.assert_any_call("ctrl", "f")
-        executor.keyboard.press.assert_any_call("escape")
-        executor.keyboard.press.assert_any_call("enter")
-
-        res3 = executor.execute(Command(Action.CLICK_ELEMENT, "first shot"), raw_text="Click first shot")
-        self.assertEqual(res3, "OK")
-
-        executor.browser.click_result.assert_not_called()
-        executor.browser.click_element.assert_not_called()
-        executor.browser.start.assert_not_called()
+        executor.execute(Command(Action.CLICK_RESULT, "1"), raw_text="Click first result")
+        executor.browser.click_result.assert_called_once_with(1, mouse_controller=executor.mouse)
 
     def test_executor_close_browser_only_closes_controlled_session(self):
         executor = Executor()

@@ -107,7 +107,8 @@ class LightState:
         """Refresh state from active browser DOM or screen window when available."""
         if browser is not None and browser.is_active():
             self.browser_open = True
-            self.current_browser = "brave"
+            if not self.current_browser:
+                self.current_browser = "chromium"
             url = browser.get_current_url()
             if url:
                 self.current_url = url

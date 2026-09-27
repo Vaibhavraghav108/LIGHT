@@ -122,7 +122,7 @@ class TestBrowserAndContextFlow(unittest.TestCase):
 
         # Step 3: Click the first result
         self.assertEqual(loop.process_text("Click the first result"), "OK")
-        executor.browser.click_result.assert_called_once_with(1)
+        executor.browser.click_result.assert_called_once_with(1, mouse_controller=executor.mouse)
 
         # Step 4: Invalid/conversational speech does NOT stop or crash LIGHT
         self.assertEqual(loop.process_text("How are you"), "IGNORED")

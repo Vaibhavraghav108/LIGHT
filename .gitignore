@@ -17,5 +17,6 @@ __pycache__/
 *.log
 screenshots/
 .playwright-browsers/
+.light_chromium_profile/
 .light.pid
 tests/.tmp_integration/

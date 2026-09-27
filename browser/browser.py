@@ -67,13 +67,20 @@ class BrowserController:
         self.page = None
         self.headless = headless
         self.executable_path = executable_path
-        self.user_data_dir = user_data_dir
+        if user_data_dir is not None:
+            self.user_data_dir = user_data_dir
+        elif not headless:
+            default_profile = Path(__file__).resolve().parent.parent / ".light_chromium_profile"
+            default_profile.mkdir(parents=True, exist_ok=True)
+            self.user_data_dir = str(default_profile)
+        else:
+            self.user_data_dir = None
         self._calibration_offset = (0, 0)
         self.active_browser_label: str | None = None
         self.active_executable_path: str | None = None
 
     # ==========================================
-    # FIND BRAVE & FALLBACK CANDIDATES
+    # FIND BROWSER & FALLBACK CANDIDATES
     # ==========================================
 
     def _find_brave(self) -> str:
@@ -92,10 +99,10 @@ class BrowserController:
         """
         Return ordered (label, executable_path) launch candidates:
         1. Explicit executable_path (if provided)
-        2. Configured Brave candidate paths that exist on disk
-        3. Playwright-managed Chromium (executable_path=None)
-        4. Workspace-local Playwright Chromium binaries (.playwright-browsers)
-        5. Installed Google Chrome candidate paths that exist on disk
+        2. Playwright-managed Chromium (executable_path=None)
+        3. Workspace-local Playwright Chromium binaries (.playwright-browsers)
+        4. Installed Google Chrome candidate paths that exist on disk
+        5. Configured Brave candidate paths as final fallback
         """
         from config import get_chrome_candidate_paths, get_workspace_chromium_candidate_paths
 
@@ -103,23 +110,14 @@ class BrowserController:
         seen: set[str | None] = set()
 
         if self.executable_path:
-            candidates.append(("Brave", str(self.executable_path)))
+            candidates.append(("Custom Browser", str(self.executable_path)))
             seen.add(str(self.executable_path))
 
-        for path in get_brave_candidate_paths():
-            try:
-                if path.exists():
-                    resolved = str(path)
-                    if resolved not in seen:
-                        candidates.append(("Brave", resolved))
-                        seen.add(resolved)
-            except OSError:
-                continue
-
-        # Playwright-managed Chromium fallback (executable_path=None)
+        # 1. Playwright-managed Chromium (primary default)
         candidates.append(("Playwright Chromium", None))
         seen.add(None)
 
+        # 2. Workspace-local Playwright Chromium binaries
         for path in get_workspace_chromium_candidate_paths():
             try:
                 if path.exists():
@@ -130,12 +128,24 @@ class BrowserController:
             except OSError:
                 continue
 
+        # 3. Installed Google Chrome
         for path in get_chrome_candidate_paths():
             try:
                 if path.exists():
                     resolved = str(path)
                     if resolved not in seen:
                         candidates.append(("Chrome", resolved))
+                        seen.add(resolved)
+            except OSError:
+                continue
+
+        # 4. Brave as final fallback
+        for path in get_brave_candidate_paths():
+            try:
+                if path.exists():
+                    resolved = str(path)
+                    if resolved not in seen:
+                        candidates.append(("Brave", resolved))
                         seen.add(resolved)
             except OSError:
                 continue
