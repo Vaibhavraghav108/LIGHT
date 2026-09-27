@@ -1,0 +1,10 @@
+# Decision engine
+laya
+
+# Windows computer control, window observation, & clipboard
+pyautogui
+pygetwindow
+pyperclip
+
+# Browser automation (Brave / Chromium)
+playwright
