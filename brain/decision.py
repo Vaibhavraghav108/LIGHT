@@ -114,8 +114,21 @@ def _is_valid_url_target(candidate: str) -> bool:
     return bool(re.match(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$", host))
 
 
+_ACTION_VERB_LOOKAHEAD = (
+    r"(?:click|open|close|search|find|move|hover|point|scroll|go|navigate|"
+    r"read|copy|select|paste|type|press|hit|wait|stop|cancel|exit|quit|"
+    r"shut\s*down|refresh|reload|back|forward)"
+)
+
 _CONVERSATIONAL_PREFIX_RE = re.compile(
-    r"^(?:(?:okay|ok|alright|all\s+right|please|hey\s+light|light|now|well|so)\s+)+(?=(?:click|open|close|search|find|move|hover|point|scroll|go|navigate|read|copy|select|paste|type|press|hit|wait|stop|exit|quit|refresh|reload|back|forward)\b)",
+    rf"^(?:(?:okay|ok|alright|all\s+right|please|now|well|so|"
+    rf"can\s+you(?:\s+please)?|could\s+you(?:\s+please)?|would\s+you(?:\s+please)?|will\s+you(?:\s+please)?)\s+)+(?={_ACTION_VERB_LOOKAHEAD}\b)",
+    re.IGNORECASE,
+)
+
+_MULTI_CLAUSE_SPLIT_RE = re.compile(
+    rf"(?:\s*[,;]+\s*(?:and\s+(?:then\s+)?|then\s+)?(?={_ACTION_VERB_LOOKAHEAD}\b))"
+    rf"|(?:\s+\b(?:and\s+then|then|and)\s+(?={_ACTION_VERB_LOOKAHEAD}\b))",
     re.IGNORECASE,
 )
 
@@ -133,6 +146,205 @@ def preprocess_text(text: str) -> str:
         cleaned = _CONVERSATIONAL_PREFIX_RE.sub("", cleaned).strip()
 
     return cleaned
+
+
+def is_explicit_stop_or_cancel(text: str) -> bool:
+    """Return True if raw spoken text is an explicit high-priority STOP/CANCEL command."""
+    cleaned = preprocess_text(text).lower()
+    return cleaned in STOP_COMMANDS
+
+
+def is_site_ready_in_state(state, site: str | None) -> bool:
+    """
+    Return True only if `state` proves the browser is currently open on a real,
+    non-blank page matching `site` (e.g. 'youtube' or 'google').
+    Returns False if browser is closed, state is None, or current_url is 'about:blank'.
+    """
+    if state is None or not site:
+        return False
+    if not getattr(state, "browser_open", False):
+        return False
+    current_site = (getattr(state, "current_site", None) or "").strip().lower()
+    if current_site != site.strip().lower():
+        return False
+    current_url = (getattr(state, "current_url", None) or "").strip().lower()
+    if not current_url or current_url == "about:blank" or current_url.startswith(("about:", "chrome://", "edge://", "brave://")):
+        return False
+    return True
+
+
+def normalize_command_plan(
+    commands: list[Command],
+    state=None,
+    raw_text: str = "",
+) -> list[Command]:
+    """
+    Post-understanding Plan Normalization & Dependency Resolution Layer.
+    - Ensures prerequisite `OPEN_URL` is inserted before `SEARCH` if the target site
+      (e.g. YouTube) is not already active and ready in `state` (or `about:blank`).
+    - Removes redundant `OPEN_URL` if `state` proves the browser is already open and
+      ready on that exact site.
+    - Preserves sequential dependency ordering: OPEN_URL -> SEARCH -> CLICK_RESULT.
+    """
+    if not commands:
+        return []
+
+    raw_lower = (raw_text or "").lower()
+    active_site: str | None = None
+    if state is not None:
+        candidate_site = getattr(state, "current_site", None)
+        if is_site_ready_in_state(state, candidate_site):
+            active_site = candidate_site.strip().lower()
+
+    normalized: list[Command] = []
+
+    for cmd in commands:
+        if cmd.action == Action.OPEN_URL and cmd.target:
+            target_low = cmd.target.lower().strip()
+            target_site = None
+            for site_key, site_url in WEBSITES.items():
+                if site_key in target_low or target_low == site_url.lower():
+                    target_site = site_key
+                    break
+
+            # If browser is already open and ready on this exact site, skip redundant OPEN_URL
+            # when part of a multi-step search workflow
+            if target_site and active_site == target_site and len(commands) > 1:
+                continue
+
+            normalized.append(cmd)
+            if target_site:
+                active_site = target_site
+            continue
+
+        if cmd.action == Action.SEARCH and cmd.target:
+            t_str = cmd.target.strip()
+            t_low = t_str.lower()
+
+            if t_low.startswith("youtube:"):
+                required_site = "youtube"
+                clean_query = t_str[8:].strip()
+            elif t_low.startswith("google:"):
+                required_site = "google"
+                clean_query = t_str[7:].strip()
+            elif "youtube" in raw_lower or active_site == "youtube":
+                required_site = "youtube"
+                clean_query = t_str
+            else:
+                required_site = "google"
+                clean_query = t_str
+
+            # Canonicalize target representation
+            if required_site == "youtube":
+                canonical_target = f"youtube:{clean_query}"
+            elif t_low.startswith("google:"):
+                canonical_target = f"google:{clean_query}"
+            else:
+                canonical_target = clean_query
+
+            # Insert prerequisite OPEN_URL if required_site is not currently active & ready
+            is_about_blank = (
+                state is not None
+                and (getattr(state, "current_url", None) or "").strip().lower() == "about:blank"
+            )
+            is_closed = state is not None and not getattr(state, "browser_open", False)
+            needs_open_url = (active_site != required_site) and (
+                len(commands) > 1
+                or is_about_blank
+                or (is_closed and "youtube" in raw_lower and "and" in raw_lower)
+            )
+            if needs_open_url and required_site in WEBSITES:
+                normalized.append(Command(Action.OPEN_URL, WEBSITES[required_site]))
+                active_site = required_site
+
+            normalized.append(Command(Action.SEARCH, canonical_target))
+            active_site = required_site
+            continue
+
+        normalized.append(cmd)
+
+    return normalized
+
+
+def parse_multi_command(text: str, state=None) -> list[Command] | None:
+    """
+    Fast-path parser for multi-step compound voice commands such as:
+    'Open YouTube, search for Python tutorials, click the first video and scroll down.'
+    Returns a sequential list of Commands if all clauses resolve deterministically,
+    or None if single-step or ambiguous (leaving complex phrasing to Qwen3 1.7B).
+    """
+    if not text:
+        return None
+
+    raw = text.strip().rstrip(".!?").strip()
+    if raw.lower().startswith(("type ", "copy ", "select ")):
+        return None
+
+    clauses = [c.strip() for c in _MULTI_CLAUSE_SPLIT_RE.split(raw) if c and c.strip()]
+    if len(clauses) < 2:
+        return None
+
+    planning_state = (
+        state.clone_for_planning()
+        if state is not None and hasattr(state, "clone_for_planning")
+        else state
+    )
+
+    commands: list[Command] = []
+    for clause in clauses:
+        try:
+            cmd = parse_deterministic_command(clause, state=planning_state)
+        except Exception:
+            return None
+        if cmd is None:
+            return None
+        commands.append(cmd)
+        if planning_state is not None and hasattr(planning_state, "record_command"):
+            try:
+                planning_state.record_command(clause, cmd)
+            except Exception:
+                pass
+
+    if len(commands) < 2:
+        return None
+
+    return normalize_command_plan(commands, state=state, raw_text=text)
+
+
+def parse_complex_fallback(text: str, state=None) -> list[Command] | None:
+    """
+    Deterministic fallback for natural multi-step search-and-open phrases
+    (e.g., 'Find a beginner Python tutorial on YouTube and open the most relevant result')
+    used when Qwen3 is disabled or unavailable.
+    """
+    if not text:
+        return None
+
+    cleaned = preprocess_text(text)
+    m = re.match(
+        r"^(?:find|search(?:\s+for)?|look\s+for)\s+(?:a\s+|an\s+)?(.+?)\s+on\s+(youtube|google)(?:\s+(?:and\s+(?:then\s+)?|then\s+)(.+))?$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if not m:
+        return None
+
+    query = m.group(1).strip()
+    site = m.group(2).lower().strip()
+    tail_clause = (m.group(3) or "").strip()
+    if not query:
+        return None
+
+    raw_commands: list[Command] = [
+        Command(Action.SEARCH, f"{site}:{query}")
+    ]
+
+    if tail_clause:
+        tail_cmd = parse_deterministic_command(tail_clause, state=state)
+        if tail_cmd is not None:
+            raw_commands.append(tail_cmd)
+
+    return normalize_command_plan(raw_commands, state=state, raw_text=text)
 
 
 def parse_deterministic_command(text: str, state=None) -> Command | None:
@@ -226,8 +438,14 @@ def parse_deterministic_command(text: str, state=None) -> Command | None:
             return Command(Action.COPY_TEXT, phrase)
 
     # 5. Click Nth search result
+    if re.match(
+        r"^(?:click|open|select)\s+(?:on\s+)?(?:the\s+)?(?:most\s+relevant|top|best)\s+(?:search\s+)?(?:result|video|link)$",
+        text_lower,
+    ):
+        return Command(Action.CLICK_RESULT, "1")
+
     result_match = re.match(
-        r"^(?:click|open|select)\s+(?:on\s+)?(?:the\s+)?(?:result\s+)?(\w+)(?:\s+search)?(?:\s+result|\s+video|\s+link)?$",
+        r"^(?:click|open|select)\s+(?:on\s+)?(?:the\s+)?(?:result\s+)?(\w+)(?:\s+(?:search|relevant|top|best))?(?:\s+result|\s+video|\s+link)?$",
         text_lower,
     )
     if result_match and ("result" in text_lower or "video" in text_lower):
@@ -236,7 +454,7 @@ def parse_deterministic_command(text: str, state=None) -> Command | None:
             return Command(Action.CLICK_RESULT, RESULT_ORDINALS[ordinal])
 
     result_num_match = re.match(
-        r"^(?:click|open|select)\s+(?:on\s+)?(?:the\s+)?(?:search\s+)?(?:result|video)\s+(?:number\s+)?(\w+)$",
+        r"^(?:click|open|select)\s+(?:on\s+)?(?:the\s+)?(?:search\s+|relevant\s+)?(?:result|video)\s+(?:number\s+)?(\w+)$",
         text_lower,
     )
     if result_num_match:
@@ -268,16 +486,17 @@ def parse_deterministic_command(text: str, state=None) -> Command | None:
             return Command(Action.SEARCH, f"youtube:{query}")
         return Command(Action.SEARCH, query)
 
-    # 7. Find element on page
-    find_match = re.match(
-        r"^find\s+(?:the\s+)?(?:element\s+|text\s+|button\s+|link\s+)?(.+?)(?:\s+button|\s+link|\s+option)?$",
-        cleaned,
-        re.IGNORECASE,
-    )
-    if find_match:
-        target = find_match.group(1).strip()
-        if target:
-            return Command(Action.FIND_ELEMENT, target)
+    # 7. Find element on page (only for direct element targets, not complex 'find ... on YouTube and ...' requests)
+    if not re.search(r"\b(?:on\s+youtube|on\s+google|and\s+(?:open|click|search|scroll|play))\b", text_lower):
+        find_match = re.match(
+            r"^find\s+(?:the\s+)?(?:element\s+|text\s+|button\s+|link\s+)?(.+?)(?:\s+button|\s+link|\s+option)?$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if find_match:
+            target = find_match.group(1).strip()
+            if target:
+                return Command(Action.FIND_ELEMENT, target)
 
     # 8. Click element vs simple mouse click
     if text_lower in {"click", "left click", "mouse click", "click mouse"}:

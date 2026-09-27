@@ -20,8 +20,57 @@ class Executor:
         self.browser = BrowserController()
         self.screen = ScreenController()
         self.state = state if state is not None else LightState()
+        self.last_verification_ms: float = 0.0
+        self.last_stop_interrupt_ms: float = 0.0
 
-    def execute(self, command: Command, raw_text: str | None = None) -> str:
+    def _sleep_interruptible(self, seconds: float, cancel_event=None):
+        """
+        Wait for `seconds` while remaining immediately interruptible (<5ms)
+        by `cancel_event.set()` when STOP/Cancel is spoken.
+        """
+        if seconds <= 0:
+            return
+        if cancel_event is None:
+            time.sleep(seconds)
+            return
+
+        t0 = time.perf_counter()
+        if cancel_event.wait(timeout=seconds):
+            self.last_stop_interrupt_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+            log_executor(f"WAIT interrupted by STOP/Cancel after {self.last_stop_interrupt_ms}ms.")
+
+    def _verify_and_recover(self, command: Command):
+        """
+        Lightweight OBSERVE -> ACT -> VERIFY -> RECOVER checks for browser operations.
+        Never adds heavy artificial delays.
+        """
+        v_start = time.perf_counter()
+        try:
+            action = command.action
+            if action in {
+                Action.OPEN_URL,
+                Action.SEARCH,
+                Action.CLICK_RESULT,
+                Action.CLICK_ELEMENT,
+                Action.GO_BACK,
+                Action.GO_FORWARD,
+                Action.REFRESH,
+            }:
+                if not self.browser.is_active():
+                    # Recover if browser session dropped unexpectedly
+                    self.browser.start()
+                current_url = self.browser.get_current_url()
+                if action == Action.OPEN_URL and not current_url and command.target:
+                    self.browser.open_url(command.target)
+        finally:
+            self.last_verification_ms = round((time.perf_counter() - v_start) * 1000.0, 2)
+
+    def execute(
+        self,
+        command: Command,
+        raw_text: str | None = None,
+        cancel_event=None,
+    ) -> str:
         action = command.action
         target = command.target
 
@@ -119,6 +168,13 @@ class Executor:
                 self.browser.search(target)
 
         elif action == Action.CLICK_RESULT:
+            if (
+                self.state.last_status == "ERROR"
+                and self.state.last_action in {Action.SEARCH, Action.OPEN_URL}
+            ):
+                raise RuntimeError(
+                    f"Cannot execute CLICK_RESULT because prerequisite {self.state.last_action.name} failed."
+                )
             index = int(target) if target and str(target).isdigit() else 1
             try:
                 self.browser.click_result(index, mouse_controller=self.mouse)
@@ -162,7 +218,7 @@ class Executor:
         elif action == Action.WAIT:
             seconds = float(target) if target else DEFAULT_WAIT_SECONDS
             log_executor(f"Waiting {seconds} seconds...")
-            time.sleep(seconds)
+            self._sleep_interruptible(seconds, cancel_event=cancel_event)
 
         # ==========================================
         # STOP
@@ -175,8 +231,12 @@ class Executor:
         else:
             raise ValueError(f"Unsupported action: {action}")
 
+        # Lightweight post-action verification
+        self._verify_and_recover(command)
+
         # Update short-term context and observation state
         self.state.record_command(raw_text, command)
         self.state.sync_observation(browser=self.browser, screen=self.screen)
 
         return "OK"
+

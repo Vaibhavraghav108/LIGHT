@@ -34,8 +34,20 @@ HANDY_DB_PATH = Path(os.environ.get("HANDY_DB_PATH", str(DEFAULT_HANDY_DB)))
 # Laya Model
 LAYA_MODEL = os.environ.get("LAYA_MODEL", "convaiinnovations/laya")
 
+# Optional Local LLM (Qwen3 1.7B via Ollama)
+LLM_ENABLED = os.environ.get("LLM_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").strip().lower()
+LLM_MODEL = os.environ.get("LLM_MODEL", "qwen3:1.7b").strip()
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:11434").strip().rstrip("/")
+LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "8.0"))
+
 # Loop & timing settings
-POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "0.25"))
+POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "0.15"))
 DUPLICATE_COOLDOWN_SECONDS = float(os.environ.get("DUPLICATE_COOLDOWN_SECONDS", "1.0"))
 DEFAULT_WAIT_SECONDS = 2.0
 BROWSER_TIMEOUT_MS = int(os.environ.get("BROWSER_TIMEOUT_MS", "5000"))
@@ -50,10 +62,13 @@ CDP_ENDPOINT_URL = f"http://127.0.0.1:{CDP_DEBUG_PORT}"
 STOP_COMMANDS = {
     "stop",
     "stop light",
+    "cancel",
     "exit",
     "exit light",
     "quit",
     "quit light",
+    "shut down light",
+    "shutdown light",
 }
 
 # Canonical website shortcuts used by decision engine and state tracker

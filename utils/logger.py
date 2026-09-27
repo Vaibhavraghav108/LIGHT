@@ -59,5 +59,14 @@ def log_state(message: str):
     logger.info(f"[STATE] {message}")
 
 
+def log_perf(message: str):
+    logger.info(f"[PERF] {message}")
+
+
+def log_llm(message: str):
+    logger.info(f"[LLM] {message}")
+
+
 def log_error(message: str):
     logger.error(f"[ERROR] {message}")
+

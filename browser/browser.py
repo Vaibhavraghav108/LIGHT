@@ -78,6 +78,7 @@ class BrowserController:
         self._calibration_offset = (0, 0)
         self.active_browser_label: str | None = None
         self.active_executable_path: str | None = None
+        self._skip_persistent_context: bool = False
 
     # ==========================================
     # FIND BROWSER & FALLBACK CANDIDATES
@@ -287,7 +288,7 @@ class BrowserController:
 
     def _launch_with_candidate(self, exe_path: str | None, launch_args: list[str]):
         """Attempt to launch browser/context with anti-bot stealth flags."""
-        if self.user_data_dir:
+        if self.user_data_dir and not getattr(self, "_skip_persistent_context", False):
             try:
                 try:
                     self.context = self.playwright.chromium.launch_persistent_context(
@@ -334,6 +335,72 @@ class BrowserController:
             )
         self.page = self.browser.new_page(no_viewport=not self.headless)
         self._apply_stealth()
+
+    @staticmethod
+    def _is_target_closed_error(err: Exception) -> bool:
+        """Return True if a Playwright exception indicates a closed page, context, or browser."""
+        msg = str(err or "").lower()
+        return any(
+            phrase in msg
+            for phrase in (
+                "target page, context or browser has been closed",
+                "target closed",
+                "browser has been closed",
+                "context has been closed",
+                "page has been closed",
+                "frame was detached",
+                "session closed",
+            )
+        )
+
+    def _recover_closed_browser(self):
+        """
+        Recover from a closed/dead Playwright page or persistent profile lock by closing
+        stale handles, disabling persistent profile reuse for the retry, and starting a clean session.
+        """
+        log_warning("Browser context/page was closed unexpectedly. Recovering clean browser session...")
+        old_page = self.page
+        old_browser = self.browser
+        old_context = self.context
+        self._skip_persistent_context = True
+        self.close()
+        self.start()
+        if self.page is None and old_page is not None:
+            self.page = old_page
+            self.browser = old_browser
+            self.context = old_context
+
+    def _safe_goto(self, url: str, wait_until: str = "domcontentloaded"):
+        """Navigate to `url`, automatically recovering once if the page/context was closed."""
+        self.start()
+        try:
+            self.page.goto(url, wait_until=wait_until)
+        except Exception as err:
+            if self._is_target_closed_error(err) or not self.is_active():
+                self._recover_closed_browser()
+                self.page.goto(url, wait_until=wait_until)
+            else:
+                raise
+
+    def _wait_for_search_results(self, engine: str):
+        """Wait briefly for search result links to render in the DOM before completing SEARCH."""
+        if self.page is None or not hasattr(self.page, "wait_for_selector"):
+            return
+        try:
+            if engine == "youtube":
+                self.page.wait_for_selector(
+                    "ytd-video-renderer a#video-title, ytd-rich-item-renderer a#video-title-link, yt-lockup-view-model a[href^='/watch'], a#video-title",
+                    state="visible",
+                    timeout=5000,
+                )
+            else:
+                self.page.wait_for_selector(
+                    "div#search a h3, #rso a h3, a[data-testid='result-title-a'], .result__a",
+                    state="visible",
+                    timeout=5000,
+                )
+        except Exception as err:
+            log_debug(f"Wait for {engine} search results skipped/timed out: {err}")
 
     def start(self):
         if self.is_active():
@@ -435,7 +502,7 @@ class BrowserController:
 
         log_browser(f"Opening: {url}")
 
-        self.page.goto(
+        self._safe_goto(
             url,
             wait_until="domcontentloaded",
         )
@@ -500,13 +567,17 @@ class BrowserController:
                     search_box.fill(query)
                     search_box.press("Enter")
                     self.page.wait_for_load_state("domcontentloaded")
+                    self._wait_for_search_results("youtube")
                     self._unfocus_inputs()
                     return
             except Exception as err:
+                if self._is_target_closed_error(err):
+                    self._recover_closed_browser()
                 log_debug(f"YouTube DOM search box fallback: {err}")
 
         search_url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
-        self.page.goto(search_url, wait_until="domcontentloaded")
+        self._safe_goto(search_url, wait_until="domcontentloaded")
+        self._wait_for_search_results("youtube")
         self._unfocus_inputs()
 
     def _is_google_captcha_page(self) -> bool:
@@ -532,7 +603,7 @@ class BrowserController:
 
         if "google." not in current_url or "/sorry/" in current_url:
             try:
-                self.page.goto("https://www.google.com", wait_until="domcontentloaded")
+                self._safe_goto("https://www.google.com", wait_until="domcontentloaded")
             except Exception as err:
                 log_debug(f"Initial google.com navigation fallback: {err}")
 
@@ -545,11 +616,13 @@ class BrowserController:
                 self.page.wait_for_load_state("domcontentloaded")
                 used_search_box = True
         except Exception as err:
+            if self._is_target_closed_error(err):
+                self._recover_closed_browser()
             log_debug(f"Google DOM search box fallback: {err}")
 
         if not used_search_box:
             search_url = f"https://www.google.com/search?q={quote_plus(query)}"
-            self.page.goto(search_url, wait_until="domcontentloaded")
+            self._safe_goto(search_url, wait_until="domcontentloaded")
 
         if self._is_google_captcha_page():
             log_warning(
@@ -557,8 +630,9 @@ class BrowserController:
                 "Automatically switching this search to DuckDuckGo so your workflow is not blocked."
             )
             ddg_url = f"https://duckduckgo.com/?q={quote_plus(query)}&ia=web"
-            self.page.goto(ddg_url, wait_until="domcontentloaded")
+            self._safe_goto(ddg_url, wait_until="domcontentloaded")
 
+        self._wait_for_search_results("google")
         self._unfocus_inputs()
 
     # ==========================================
@@ -732,7 +806,7 @@ class BrowserController:
         }
 
         info = self.page.evaluate(
-            """(params) => {
+            r"""(params) => {
                 function isVisible(el) {
                     if (!el) return false;
                     const style = window.getComputedStyle(el);
@@ -762,7 +836,11 @@ class BrowserController:
                 }
 
                 function computeSafePoint(el, isInputTarget = false) {
-                    const clickable = el.closest('a[href], button, [role="button"], [role="link"]') || el;
+                    const clickable = el.closest('button, a[href], [role="button"], [role="link"]') || el;
+                    try {
+                        document.querySelectorAll('[data-light-click-target="true"]').forEach(n => n.removeAttribute('data-light-click-target'));
+                        clickable.setAttribute('data-light-click-target', 'true');
+                    } catch (e) {}
                     clickable.scrollIntoView({ block: 'center', inline: 'center' });
                     let rect = clickable.getBoundingClientRect();
 
@@ -782,6 +860,8 @@ class BrowserController:
                     const y = Math.max(2, Math.min(window.innerHeight - 2, rect.top + offsetY));
                     const tag = (clickable.tagName || '').toLowerCase();
                     const isInput = isInputTarget || tag === 'input' || tag === 'textarea';
+                    const preText = (clickable.innerText || clickable.textContent || '').trim();
+                    const preAdShowing = Boolean(document.querySelector('#movie_player.ad-showing, .ad-showing'));
                     if (isInput && typeof clickable.focus === 'function') {
                         clickable.focus();
                     }
@@ -793,8 +873,11 @@ class BrowserController:
                         is_input: isInput,
                         vp_x: x,
                         vp_y: y,
+                        pre_text: preText,
+                        pre_ad_showing: preAdShowing,
+                        pre_url: window.location.href,
                         rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
-                        matched: (clickable.innerText || clickable.getAttribute('aria-label') || clickable.getAttribute('title') || clickable.getAttribute('placeholder') || clickable.tagName || '').trim().slice(0, 60),
+                        matched: (preText || clickable.getAttribute('aria-label') || clickable.getAttribute('title') || clickable.getAttribute('placeholder') || clickable.tagName || '').trim().slice(0, 60),
                         window_metrics: getWindowMetrics()
                     };
                 }
@@ -833,10 +916,33 @@ class BrowserController:
 
                 if (params.kind === 'nth_result') {
                     const url = window.location.href.toLowerCase();
-                    let selectors = 'ytd-video-renderer a#video-title, ytd-rich-item-renderer a#video-title-link, a#video-title, a#video-title-link, a[href*="/shorts/"], a:has(h3), div#search a h3, a[data-testid="result-title-a"], article h2 a, main a[href], article a[href], a[href]';
                     if (url.includes('youtube.com')) {
-                        selectors = 'ytd-video-renderer a#video-title, ytd-rich-item-renderer a#video-title-link, a#video-title, a#video-title-link, a[href*="/shorts/"]';
-                    } else if (url.includes('google.com')) {
+                        const videoSelectorList = [
+                            'ytd-video-renderer a#video-title',
+                            'ytd-video-renderer a[href^="/watch?v="]',
+                            'yt-lockup-view-model a[href^="/watch?v="]',
+                            'ytd-rich-item-renderer a#video-title-link',
+                            '#contents a#video-title',
+                            '#contents a#video-title-link'
+                        ];
+                        let videoNodes = [];
+                        for (const sel of videoSelectorList) {
+                            const matched = Array.from(document.querySelectorAll(sel)).filter(el => {
+                                if (!isVisible(el)) return false;
+                                if (el.closest('ytd-mini-guide-entry-renderer, ytd-guide-entry-renderer, #guide')) return false;
+                                return true;
+                            });
+                            if (matched.length > 0) {
+                                videoNodes = matched;
+                                break;
+                            }
+                        }
+                        const chosen = videoNodes[Math.max(0, params.index - 1)];
+                        if (!chosen) return { found: false };
+                        return computeSafePoint(chosen);
+                    }
+                    let selectors = 'a:has(h3), div#search a h3, a[data-testid="result-title-a"], article h2 a, main a[href], article a[href], a[href]';
+                    if (url.includes('google.com')) {
                         selectors = 'a:has(h3), div#search a h3';
                     } else if (url.includes('duckduckgo.com')) {
                         selectors = 'a[data-testid="result-title-a"], article h2 a, h2 a';
@@ -845,6 +951,26 @@ class BrowserController:
                     const chosen = nodes[Math.max(0, params.index - 1)];
                     if (!chosen) return { found: false };
                     return computeSafePoint(chosen);
+                }
+
+                // 2b. YOUTUBE AD SKIP BUTTON PRIORITY
+                if (params.terms && params.terms.some(t => t === 'skip' || t === 'skip ad' || t === 'skip ads' || t === 'skip button')) {
+                    const ytSkipSelectors = [
+                        'button.ytp-skip-ad-button',
+                        'button.ytp-ad-skip-button-modern',
+                        'button.ytp-ad-skip-button',
+                        '.ytp-skip-ad-button',
+                        '.ytp-ad-skip-button-modern',
+                        '.ytp-ad-skip-button',
+                        '.ytp-ad-skip-button-slot button',
+                        '.ytp-ad-overlay-close-button'
+                    ];
+                    for (const sel of ytSkipSelectors) {
+                        const skipNodes = Array.from(document.querySelectorAll(sel)).filter(isVisible);
+                        if (skipNodes.length > 0) {
+                            return computeSafePoint(skipNodes[0]);
+                        }
+                    }
                 }
 
                 // 3. NAMED UI ELEMENT / BUTTON / LINK / TEXT
@@ -876,7 +1002,27 @@ class BrowserController:
                 let bestEl = null;
                 let bestScore = -Infinity;
 
+                function stemWord(w) {
+                    if (w.length > 4 && w.endsWith('ies')) return w.slice(0, -3) + 'y';
+                    if (w.length > 3 && w.endsWith('es')) return w.slice(0, -2);
+                    if (w.length > 3 && w.endsWith('s')) return w.slice(0, -1);
+                    return w;
+                }
+
+                function tokenize(str) {
+                    return (str || '')
+                        .toLowerCase()
+                        .replace(/[^a-z0-9\s]/g, ' ')
+                        .split(/\s+/)
+                        .filter(Boolean);
+                }
+
+                const stopWords = new Set(['for', 'the', 'a', 'an', 'in', 'on', 'to', 'of', 'and', 'with', 'by', 'at', 'from']);
+
                 for (const term of params.terms) {
+                    const termTokens = tokenize(term);
+                    const termContentTokens = termTokens.filter(w => !stopWords.has(w)).map(stemWord);
+
                     for (const el of candidates) {
                         const aria = (el.getAttribute('aria-label') || '').trim().toLowerCase();
                         const title = (el.getAttribute('title') || '').trim().toLowerCase();
@@ -888,15 +1034,38 @@ class BrowserController:
                             aria.includes(term) ||
                             title.includes(term)
                         );
-                        if (!exactMatch && !containsMatch) continue;
 
-                        let score = exactMatch ? 200 : 80;
+                        let fuzzyRatio = 0;
+                        let matchedContentCount = 0;
+
+                        if (!exactMatch && !containsMatch && termContentTokens.length >= 2) {
+                            const combinedText = `${inner} ${aria} ${title}`;
+                            const elStemSet = new Set(tokenize(combinedText).map(stemWord));
+                            for (const tok of termContentTokens) {
+                                if (elStemSet.has(tok)) {
+                                    matchedContentCount++;
+                                }
+                            }
+                            fuzzyRatio = matchedContentCount / termContentTokens.length;
+                        }
+
+                        const isFuzzyMatch = (
+                            termContentTokens.length >= 2 &&
+                            matchedContentCount >= 2 &&
+                            fuzzyRatio >= 0.6
+                        );
+
+                        if (!exactMatch && !containsMatch && !isFuzzyMatch) continue;
+
+                        let score = exactMatch ? 200 : (containsMatch ? 110 : Math.round(fuzzyRatio * 95));
 
                         const tag = el.tagName.toLowerCase();
                         const role = (el.getAttribute('role') || '').toLowerCase();
                         const isButton = (tag === 'button' || role === 'button');
                         const isLink = (tag === 'a' || role === 'link' || role === 'tab');
+                        const isVideoTitle = (el.id === 'video-title' || el.id === 'video-title-link');
 
+                        if (isVideoTitle) score += 35;
                         if (params.semantic === 'button' && isButton) score += 60;
                         if (params.semantic === 'link' && isLink) score += 60;
                         if (params.semantic === 'any' && (isButton || isLink)) score += 45;
@@ -1010,7 +1179,7 @@ class BrowserController:
         return est_x, est_y
 
     # ==========================================
-    # DOM INTERACTION
+    # DOM INTERACTION & VERIFIED PHYSICAL CLICK
     # ==========================================
 
     def _settle_after_click(self):
@@ -1020,23 +1189,258 @@ class BrowserController:
         except Exception as err:
             log_debug(f"Post-click load state wait skipped: {err}")
 
+    def _attach_click_tracker(self):
+        """Install a lightweight click-event listener on the page before clicking."""
+        try:
+            self.page.evaluate(
+                """() => {
+                    window.__lightClickStats = { count: 0, trusted: 0 };
+                    if (!window.__lightClickListenerAttached) {
+                        window.__lightClickListenerAttached = true;
+                        window.addEventListener('click', (e) => {
+                            if (window.__lightClickStats) {
+                                window.__lightClickStats.count += 1;
+                                if (e.isTrusted) window.__lightClickStats.trusted += 1;
+                            }
+                        }, { capture: true, passive: true });
+                    }
+                }"""
+            )
+        except Exception as err:
+            log_debug(f"_attach_click_tracker skipped: {err}")
+
+    def _perform_physical_click_and_verify(
+        self,
+        target: str,
+        mouse_controller=None,
+        require_skip_verification: bool = False,
+    ) -> dict:
+        """
+        Execute the complete LOCATE -> MOVE -> VERIFY CURSOR -> PHYSICAL CLICK -> VERIFY pipeline:
+        1. Bring browser page to front and attach DOM click tracker.
+        2. Move physical mouse cursor onto target and verify/correct cursor coordinates.
+        3. Perform actual physical mouse click (mouseDown + mouseUp).
+        4. If running headless or if OS click was intercepted before reaching the webpage,
+           send Playwright hardware-level trusted mouse click at (vp_x, vp_y).
+        5. Verify post-click UI/DOM state change (especially for 'skip' / interactive buttons).
+        """
+        try:
+            self.page.bring_to_front()
+        except Exception:
+            pass
+
+        self._attach_click_tracker()
+
+        cursor_before = (0, 0)
+        if mouse_controller is not None and hasattr(mouse_controller, "get_position"):
+            try:
+                pos = mouse_controller.get_position()
+                if isinstance(pos, tuple) and len(pos) == 2:
+                    cursor_before = (int(pos[0]), int(pos[1]))
+            except Exception:
+                pass
+
+        if mouse_controller is not None:
+            est_x, est_y = self.move_mouse_to_element(target, mouse_controller)
+            info = self.locate_element_in_viewport(target, perform_click=False)
+            vp_x = float(info["vp_x"])
+            vp_y = float(info["vp_y"])
+            screen_size = mouse_controller.get_screen_size()
+            recalc_x, recalc_y = self.convert_viewport_to_screen(
+                vp_x, vp_y, info.get("window_metrics", {}), screen_size
+            )
+            cal_dx, cal_dy = self._calibration_offset
+            latest_x, latest_y = mouse_controller.clamp_to_screen(
+                recalc_x + cal_dx, recalc_y + cal_dy
+            )
+            if abs(latest_x - est_x) > 3 or abs(latest_y - est_y) > 3:
+                est_x, est_y = mouse_controller.move(latest_x, latest_y, duration=0.05)
+
+            cursor_after_move = (est_x, est_y)
+            if hasattr(mouse_controller, "verify_and_correct_position"):
+                try:
+                    verified_pos = mouse_controller.verify_and_correct_position(
+                        est_x, est_y, tolerance=5
+                    )
+                    if isinstance(verified_pos, tuple) and len(verified_pos) == 2:
+                        cursor_after_move = (int(verified_pos[0]), int(verified_pos[1]))
+                except Exception:
+                    pass
+
+            log_browser(
+                f"target={target} viewport=({int(vp_x)},{int(vp_y)}) "
+                f"screen=({est_x},{est_y}) cursor_before={cursor_before} "
+                f"cursor_after_move={cursor_after_move} click_started"
+            )
+
+            if hasattr(mouse_controller, "click_at"):
+                mouse_controller.click_at(est_x, est_y)
+            else:
+                mouse_controller.click()
+        else:
+            info = self.locate_element_in_viewport(target, perform_click=False)
+            vp_x = float(info["vp_x"])
+            vp_y = float(info["vp_y"])
+            est_x, est_y = int(vp_x), int(vp_y)
+            cursor_after_move = (est_x, est_y)
+            log_browser(
+                f"target={target} viewport=({int(vp_x)},{int(vp_y)}) "
+                f"screen=({est_x},{est_y}) cursor_before={cursor_before} "
+                f"cursor_after_move={cursor_after_move} click_started"
+            )
+
+        # Check whether the webpage received the physical OS click.
+        # In headless mode or if an OS overlay intercepted the physical click,
+        # dispatch Playwright's trusted CDP mouseDown + mouseUp at (vp_x, vp_y).
+        click_received_by_page = False
+        try:
+            stats = self.page.evaluate("() => window.__lightClickStats")
+            if isinstance(stats, dict) and int(stats.get("count", 0)) > 0:
+                click_received_by_page = True
+        except Exception:
+            pass
+
+        if not click_received_by_page:
+            try:
+                self.page.mouse.move(vp_x, vp_y)
+                self.page.mouse.down(button="left")
+                self.page.mouse.up(button="left")
+            except Exception as err:
+                log_debug(f"Playwright hardware mouse click fallback skipped: {err}")
+
+        log_browser(
+            f"target={target} viewport=({int(vp_x)},{int(vp_y)}) "
+            f"screen=({est_x},{est_y}) cursor_before={cursor_before} "
+            f"cursor_after_move={cursor_after_move} click_completed"
+        )
+
+        self._settle_after_click()
+        self._verify_element_click(
+            target=target,
+            pre_info=info,
+            vp_x=vp_x,
+            vp_y=vp_y,
+            require_skip_verification=require_skip_verification,
+        )
+        return info
+
+    def _verify_element_click(
+        self,
+        target: str,
+        pre_info: dict,
+        vp_x: float,
+        vp_y: float,
+        require_skip_verification: bool = False,
+    ):
+        """
+        Verify whether the physical click activated the target UI element.
+        For 'skip' buttons (or elements with explicit activation verification),
+        checks whether the button disappeared, changed text/state, or cleared the ad state.
+        Performs a single controlled fallback if the initial click did not activate the element,
+        and raises RuntimeError if activation still fails.
+        """
+        is_skip_target = require_skip_verification or (
+            (target or "").strip().lower() in {"skip", "skip ad", "skip ads", "skip button"}
+        )
+
+        def check_post_state() -> dict | None:
+            try:
+                res = self.page.evaluate(
+                    """(pre) => {
+                        function isVisible(el) {
+                            if (!el || !el.isConnected) return false;
+                            const style = window.getComputedStyle(el);
+                            if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) {
+                                return false;
+                            }
+                            const rect = el.getBoundingClientRect();
+                            return rect.width > 4 && rect.height > 4;
+                        }
+                        const el = document.querySelector('[data-light-click-target="true"]');
+                        const clickStats = window.__lightClickStats || { count: 0, trusted: 0 };
+                        const nowUrl = window.location.href;
+                        const nowAdShowing = Boolean(document.querySelector('#movie_player.ad-showing, .ad-showing'));
+                        const ytSkipStillVisible = Array.from(
+                            document.querySelectorAll('button.ytp-skip-ad-button, button.ytp-ad-skip-button-modern, button.ytp-ad-skip-button, .ytp-skip-ad-button')
+                        ).some(isVisible);
+
+                        if (!el || !isVisible(el)) {
+                            return { activated: true, reason: 'target_disappeared', clickCount: clickStats.count };
+                        }
+                        const nowText = (el.innerText || el.textContent || '').trim();
+                        const dataClicked = el.getAttribute('data-clicked') === 'true' || el.getAttribute('aria-pressed') === 'true';
+                        const isDisabled = Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true');
+                        const urlChanged = Boolean(pre.pre_url && nowUrl !== pre.pre_url);
+                        const textChanged = Boolean(pre.pre_text !== undefined && nowText !== pre.pre_text);
+                        const adCleared = Boolean(pre.pre_ad_showing && !nowAdShowing && !ytSkipStillVisible);
+
+                        return {
+                            activated: Boolean(urlChanged || textChanged || dataClicked || isDisabled || adCleared),
+                            clickCount: clickStats.count,
+                            nowText: nowText,
+                            ytSkipStillVisible: ytSkipStillVisible,
+                            nowAdShowing: nowAdShowing
+                        };
+                    }""",
+                    {
+                        "pre_text": pre_info.get("pre_text", ""),
+                        "pre_url": pre_info.get("pre_url", ""),
+                        "pre_ad_showing": pre_info.get("pre_ad_showing", False),
+                    },
+                )
+                return res if isinstance(res, dict) else None
+            except Exception:
+                return None
+
+        state_check = check_post_state()
+        if state_check is None:
+            return
+
+        if state_check.get("activated"):
+            return
+
+        # Controlled fallback: if the physical click did not activate the element
+        # (or if clickCount == 0), perform a single controlled fallback and re-verify.
+        if is_skip_target or int(state_check.get("clickCount", 0)) == 0:
+            try:
+                self.page.mouse.click(vp_x, vp_y)
+                self.page.evaluate(
+                    """() => {
+                        const el = document.querySelector('[data-light-click-target="true"], button.ytp-skip-ad-button, button.ytp-ad-skip-button-modern');
+                        if (el && typeof el.click === 'function') el.click();
+                    }"""
+                )
+                self._settle_after_click()
+            except Exception as err:
+                log_debug(f"Controlled click fallback skipped: {err}")
+
+            state_check = check_post_state()
+            if state_check is not None and is_skip_target and not state_check.get("activated"):
+                raise RuntimeError(
+                    f"Click verification failed for '{target}': Skip button remained visible and unchanged after physical click."
+                )
+
     def click_result(self, index: int = 1, mouse_controller=None):
         if index < 1:
             index = 1
+        if self.page is not None:
+            current_url = str(getattr(self.page, "url", "") or "").strip().lower()
+            if current_url == "about:blank":
+                raise RuntimeError(
+                    "Cannot click search result: browser page is on about:blank (search results are not loaded)."
+                )
+            if "youtube.com/results" in current_url:
+                self._wait_for_search_results("youtube")
+            elif "google." in current_url and "/search" in current_url:
+                self._wait_for_search_results("google")
         log_browser(f"Clicking result #{index}...")
         target_str = f"result {index}"
-        if mouse_controller is not None:
-            self.move_mouse_to_element(target_str, mouse_controller)
-        self.locate_element_in_viewport(target_str, perform_click=True)
-        self._settle_after_click()
+        self._perform_physical_click_and_verify(target_str, mouse_controller=mouse_controller)
         self._unfocus_inputs()
 
     def click_element(self, text: str, mouse_controller=None):
         log_browser(f"Clicking element: '{text}'")
-        if mouse_controller is not None:
-            self.move_mouse_to_element(text, mouse_controller)
-        info = self.locate_element_in_viewport(text, perform_click=True)
-        self._settle_after_click()
+        info = self._perform_physical_click_and_verify(text, mouse_controller=mouse_controller)
 
         if not info.get("is_input"):
             self._unfocus_inputs()

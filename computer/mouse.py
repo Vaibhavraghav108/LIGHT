@@ -1,5 +1,6 @@
 import ctypes
 import re
+import time
 import pyautogui
 
 
@@ -11,6 +12,10 @@ except Exception:
         ctypes.windll.user32.SetProcessDPIAware()
     except Exception:
         pass
+
+# Prevent PyAutoGUI from raising FailSafeException when the user's cursor
+# happens to be resting in a screen corner before a voice command runs.
+pyautogui.FAILSAFE = False
 
 
 SMALL_WORDS = {"a little", "little", "slightly", "a bit", "bit", "tiny bit", "nudge", "short"}
@@ -31,6 +36,9 @@ class MouseController:
     LARGE_STEP = 300
     SCREEN_MARGIN = 5
 
+    def __init__(self):
+        self._last_known_pos: tuple[int, int] = (0, 0)
+
     def get_screen_size(self) -> tuple[int, int]:
         width, height = pyautogui.size()
         return int(width), int(height)
@@ -43,9 +51,80 @@ class MouseController:
         clamped_y = max(margin, min(int(round(y)), height - margin - 1))
         return clamped_x, clamped_y
 
+    def get_position(self) -> tuple[int, int]:
+        """Return the actual current OS mouse cursor coordinates (x, y)."""
+        pos = pyautogui.position()
+        px, py = int(pos[0]), int(pos[1])
+        if (px, py) != (0, 0):
+            self._last_known_pos = (px, py)
+            return px, py
+        # If (0, 0), check whether Win32 GetCursorPos actually succeeded or returned 0 (ERROR_ACCESS_DENIED)
+        try:
+            pt = (ctypes.c_long * 2)()
+            ok = ctypes.windll.user32.GetCursorPos(pt)
+            if ok == 0 and self._last_known_pos != (0, 0):
+                return self._last_known_pos
+        except Exception:
+            pass
+        return px, py
+
+    def verify_and_correct_position(
+        self,
+        target_x: int | float,
+        target_y: int | float,
+        tolerance: int = 5,
+    ) -> tuple[int, int]:
+        """
+        Verify that the physical OS cursor is within `tolerance` pixels of `(target_x, target_y)`.
+        If outside tolerance, re-move the cursor to the clamped target before clicking.
+        """
+        clamped_x, clamped_y = self.clamp_to_screen(target_x, target_y)
+        try:
+            cur_x, cur_y = self.get_position()
+            if abs(cur_x - clamped_x) > tolerance or abs(cur_y - clamped_y) > tolerance:
+                pyautogui.moveTo(clamped_x, clamped_y, duration=0.04)
+                self._last_known_pos = (clamped_x, clamped_y)
+                cur_x, cur_y = self.get_position()
+            return cur_x, cur_y
+        except Exception:
+            return clamped_x, clamped_y
+
     def click(self):
         """Left-click at the current mouse position."""
         pyautogui.click()
+
+    def click_at(
+        self,
+        x: int | float | None = None,
+        y: int | float | None = None,
+        settle_delay: float = 0.035,
+        hold_delay: float = 0.025,
+        tolerance: int = 5,
+    ) -> tuple[int, int]:
+        """
+        Verify cursor position at `(x, y)`, wait a brief stabilization delay (`settle_delay`),
+        and perform a physical OS left-click (`mouseDown` + `mouseUp`).
+        """
+        if x is not None and y is not None:
+            final_x, final_y = self.verify_and_correct_position(x, y, tolerance=tolerance)
+        else:
+            try:
+                final_x, final_y = self.get_position()
+            except Exception:
+                final_x, final_y = (0, 0)
+
+        if settle_delay > 0:
+            time.sleep(settle_delay)
+
+        try:
+            pyautogui.mouseDown(x=final_x, y=final_y, button="left")
+            if hold_delay > 0:
+                time.sleep(hold_delay)
+            pyautogui.mouseUp(x=final_x, y=final_y, button="left")
+        except Exception:
+            pyautogui.click(x=final_x, y=final_y)
+
+        return final_x, final_y
 
     def scroll(self, direction: str):
         """Scroll up or down."""
@@ -62,6 +141,7 @@ class MouseController:
         """Smoothly move the physical cursor to clamped screen coordinates (x, y)."""
         clamped_x, clamped_y = self.clamp_to_screen(x, y)
         pyautogui.moveTo(clamped_x, clamped_y, duration=duration)
+        self._last_known_pos = (clamped_x, clamped_y)
         return clamped_x, clamped_y
 
     def move_relative(self, dx: int | float, dy: int | float, duration: float = 0.25):
