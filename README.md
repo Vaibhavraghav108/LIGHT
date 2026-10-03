@@ -1,7 +1,7 @@
 # LIGHT — Voice-Controlled Windows & Browser Automation Assistant
 
 [![LIGHT CI](https://github.com/Vaibhavraghav108/LIGHT/actions/workflows/tests.yml/badge.svg)](https://github.com/Vaibhavraghav108/LIGHT/actions/workflows/tests.yml)
-[![Tests: 119 Passed](https://img.shields.io/badge/Tests-119%20passed-brightgreen.svg)](docs/TESTING.md)
+[![Tests: 123 Passed](https://img.shields.io/badge/Tests-123%20passed-brightgreen.svg)](docs/TESTING.md)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-blue.svg)](docs/PRODUCT_SPEC.md)
 [![Architecture: Local--First](https://img.shields.io/badge/Architecture-Local--First-orange.svg)](docs/ARCHITECTURE.md)
 
@@ -92,11 +92,11 @@ Say **"Stop"**, **"Stop light"**, **"Exit"**, or **"Quit"** (or press `Ctrl+C`) 
 
 See [`docs/TESTING.md`](docs/TESTING.md) for full testing documentation.
 
-### Full Discovery Test Suite (119 Tests)
+### Full Discovery Test Suite (127 Tests)
 ```powershell
 .\lightenv\Scripts\python.exe -m unittest discover -s tests -v
 ```
-**Baseline Result**: `Ran 119 tests in ~24s` $\to$ `OK (skipped=4)` (115 executed and passed; 4 opt-in Windows host smoke checks skipped by default).
+**Baseline Result**: `Ran 127 tests in ~27s` $\to$ `OK (skipped=4)` (123 executed and passed; 4 opt-in Windows host smoke checks skipped by default).
 
 ### Static Compilation Syntax Check
 ```powershell
@@ -138,7 +138,7 @@ LIGHT/
 │   └── screen.py                # Window focus observation & window controls
 │
 ├── core/                        # Concurrency & Execution Core
-│   ├── executor.py              # Central action dispatcher & ownership routing
+│   ├── executor.py              # Action dispatcher, ownership routing & background agent worker
 │   ├── loop.py                  # Dedicated background listener & consumer loop
 │   ├── queue_manager.py         # Thread-safe CommandQueue with STOP preemption
 │   └── state.py                 # LightState & BrowserOwnership lifecycle

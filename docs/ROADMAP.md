@@ -29,12 +29,13 @@
 - [x] Event-loop-safe async agent execution (`execute_task`) preventing event loop conflicts.
 - [x] Three-state browser ownership model (`NONE`, `LIGHT`, `AGENT`) preventing controller collisions.
 - [x] Concurrent desktop commands (`OPEN_APP`, `HOTKEY`, `TYPE`, `MEDIA_*`) while agent browses in background.
+- [x] Managed background agent worker (`LIGHT-AgentWorker` in `core/executor.py`) decoupling long-running `AGENT_TASK` from the consumer loop with duplicate task protection and bounded join.
 - [x] GitHub repository search integration (`search_github`) and search results container detection.
 - [x] Multi-feature search candidate scoring (+120 domain, +80 slug, +50 target) prioritizing official repos.
 - [x] Semantic post-click destination verification (`verify_destination`) preventing false success reports.
 - [x] Foreground-aware typing with window focus inspection (`computer/screen.py`).
 - [x] Windows window state controls (minimize, maximize, restore, switch) and media playback keys.
-- [x] Comprehensive test suite expansion to 119 discovered tests (115 passed, 4 opt-in skipped).
+- [x] Comprehensive test suite expansion to 127 discovered tests (123 passed, 4 opt-in skipped).
 
 ---
 

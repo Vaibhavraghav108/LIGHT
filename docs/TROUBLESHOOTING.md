@@ -288,3 +288,43 @@ Implemented a robust multi-browser fallback chain in `BrowserController.start()`
 
 ### Regression Test
 - `tests/test_browser.py::TestBrowserAndContextFlow::test_start_fallback_to_chromium_when_brave_inaccessible`
+
+---
+
+## Issue 11 — Normal Commands Blocked Behind Long-Running Autonomous Agent Tasks (`queue_wait` ~260s)
+
+### Problem
+When the user initiated an open-ended autonomous research task (`Action.AGENT_TASK`), all subsequent voice commands (`"Open YouTube"`, `"Open Google"`, `"Close Notepad"`) were queued behind the agent task and blocked until the agent fully finished minutes later.
+
+### Symptoms
+```text
+[AGENT_TASK] execution ≈ 443215 ms
+[VOICE] Open YouTube
+[PERF] ... queue_wait=263354 ms
+[VOICE] Open Google
+[PERF] ... queue_wait=255313 ms
+```
+The voice listener continued hearing and enqueueing spoken utterances, but the consumer loop was completely blocked inside synchronous execution of the agent task.
+
+### Root Cause
+In [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py), `Executor.execute()` handled `Action.AGENT_TASK` by synchronously calling `self.browser_agent.run_task(task_instruction=target, cancel_event=cancel_event)`. Because Browser Use with local Ollama (`qwen3:1.7b`) takes multiple minutes to browse, synthesize, and complete tasks, the single `LightLoop` consumer thread was held hostage for the entire duration of the research run.
+
+### Fix
+1. **Managed Background Worker (`LIGHT-AgentWorker`)**: Offloaded `browser_agent.run_task()` to a dedicated managed daemon thread (`LIGHT-AgentWorker`) inside `Executor.execute()`.
+2. **Immediate Consumer Return**: `Executor.execute()` sets `state.agent_running = True`, transitions `BrowserOwnership.AGENT`, starts the background worker thread, and returns `"OK"` immediately to the caller, allowing `LightLoop` to continue dequeuing and executing normal commands.
+3. **Duplicate Agent Protection**: If a second `AGENT_TASK` is received while a worker is already running, `Executor.execute()` logs a message and returns `"REJECTED"`, preventing duplicate sessions and CPU starvation.
+4. **Lifecycle & Preemption Management**: Added `join_agent()` and `close()` in `Executor` to set `cancel_event` and safely join the worker within bounded timeouts (<300ms on STOP, 500ms on loop exit).
+5. **State Restoration**: When `_agent_worker` terminates, it updates `state.agent_running = False` and safely restores `BrowserOwnership` to `LIGHT` (if primary browser is open) or `NONE`.
+
+### Relevant Files
+- [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py)
+
+### Regression Test
+- `tests/test_new_features.py::TestNewFeaturesIntegration::test_45_agent_task_runs_in_background_without_blocking_executor`
+- `tests/test_new_features.py::TestNewFeaturesIntegration::test_46_normal_commands_execute_immediately_while_agent_runs`
+- `tests/test_new_features.py::TestNewFeaturesIntegration::test_47_duplicate_agent_task_is_rejected_while_one_is_running`
+- `tests/test_new_features.py::TestNewFeaturesIntegration::test_48_stop_preempts_background_agent_worker`
+- `tests/test_new_features.py::TestNewFeaturesIntegration::test_49_loop_shutdown_joins_agent_worker`
+- `tests/test_new_features.py::TestNewFeaturesIntegration::test_50_agent_worker_failure_resets_state`
+- `tests/test_new_features.py::TestNewFeaturesIntegration::test_51_async_loop_executes_normal_command_while_agent_runs`
+- `tests/test_new_features.py::TestNewFeaturesIntegration::test_52_interleaved_desktop_and_browser_commands_during_agent_task`

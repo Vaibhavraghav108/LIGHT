@@ -106,3 +106,5 @@ To preserve architectural clarity, product requirements must not be confused wit
   **Implementation**: Playwright Chromium with persistent session recycling and CDP fallback.
 - **Requirement**: "Verified result selection."  
   **Implementation**: Multi-feature in-viewport scoring and post-click semantic destination verification.
+- **Requirement**: "Unblocked normal command execution during autonomous agent tasks."
+  **Implementation**: Managed background worker thread (`LIGHT-AgentWorker` in `core/executor.py`) with duplicate task protection and immediate consumer loop return.

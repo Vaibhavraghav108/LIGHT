@@ -104,7 +104,7 @@ computer/                browser/browser.py       browser/agent.py
 
 ### Layer 5: Execution Engine (`core/executor.py`)
 - **Component**: [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
-- **Role**: Dispatches parsed commands to appropriate subsystem controllers.
+- **Role**: Dispatches parsed commands to appropriate subsystem controllers and manages background agent threads.
 - **Subsystem Routing**:
   - **Desktop Applications** (`computer/apps.py`): Launch, focus, and close desktop programs.
   - **Window & Focus** (`computer/screen.py`): Inspect active foreground windows and process names.
@@ -112,6 +112,13 @@ computer/                browser/browser.py       browser/agent.py
   - **Mouse Controls** (`computer/mouse.py`): Relative nudges, DPI-aware coordinates, physical clicks.
   - **Deterministic Browser** (`browser/browser.py`): Playwright-controlled Chromium session.
   - **Autonomous Web Agent** (`browser/agent.py`): Subordinate Browser Use task runner.
+- **Background Agent Execution (`LIGHT-AgentWorker`)**:
+  - `Action.AGENT_TASK` commands are dispatched to a dedicated managed daemon thread (`LIGHT-AgentWorker`).
+  - `Executor.execute()` returns `"OK"` immediately, preventing multi-minute research tasks from blocking the primary `LightLoop` consumer thread.
+  - Subsequent desktop and browser commands execute without queuing delays while the agent runs in the background.
+  - If a second `AGENT_TASK` is requested while one is already active, it is rejected with `"REJECTED"`.
+  - When the agent finishes or fails, `LIGHT-AgentWorker` updates `state.agent_running` and restores ownership to `BrowserOwnership.LIGHT` or `NONE`.
+  - On emergency `STOP` or loop termination, `stop_background_agent()` / `close()` sets `cancel_event` and safely joins the worker within a bounded timeout.
 
 ---
 
@@ -159,10 +166,10 @@ To prevent session corruption and event collisions between deterministic Playwri
    - Active exclusively during `AGENT_TASK` execution.
    - Browser Use creates and manages its own isolated browser session.
    - The primary Playwright session is locked to prevent command interleaving.
-3. **Desktop Concurrency**:
-   - While `BrowserOwnership.AGENT` is active, normal desktop commands (`OPEN_APP`, `HOTKEY`, `TYPE`, `MEDIA_*`) continue to execute unimpeded. The user can switch to Notepad or adjust volume while an agent browses in the background.
+3. **Desktop & Browser Concurrency**:
+   - While `BrowserOwnership.AGENT` is active on its background thread (`LIGHT-AgentWorker`), normal desktop commands (`OPEN_APP`, `HOTKEY`, `TYPE`, `MEDIA_*`) and general non-conflicting actions execute unimpeded without queuing delays. The consumer loop does not wait for the agent to finish.
 4. **Emergency STOP Reset**:
-   - If `"Stop"` or `"Cancel"` is uttered while `AGENT` ownership is active, `executor.browser_agent.cancel()` aborts the agent and ownership resets immediately to `BrowserOwnership.NONE`.
+   - If `"Stop"` or `"Cancel"` is uttered while `AGENT` ownership is active, `executor.browser_agent.cancel()` aborts the agent, `stop_background_agent()` joins the worker within 300ms, and ownership resets immediately to `BrowserOwnership.NONE`.
 
 ---
 

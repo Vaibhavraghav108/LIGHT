@@ -193,3 +193,25 @@ Enforce active foreground window and process verification (`computer/screen.py`)
 
 ## Related Components
 - [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py), [`computer/keyboard.py`](file:///c:/Projects/LIGHT/computer/keyboard.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
+
+---
+
+# ADR-010 — Managed Background Worker for Autonomous Agent Tasks (`LIGHT-AgentWorker`)
+
+## Status
+Accepted
+
+## Decision
+Execute long-running Browser Use autonomous agent tasks (`Action.AGENT_TASK`) in a dedicated managed background daemon thread (`LIGHT-AgentWorker`) managed by `core/executor.py`, returning immediately to the `LightLoop` consumer loop. Enforce single-active-worker semantics by rejecting duplicate concurrent agent requests (`ActionExecutionResult.REJECTED`).
+
+## Reason
+1. **Consumer Thread Blocking**: Previously, `Executor.execute()` synchronously invoked `self.browser_agent.run_task(...)`. For open-ended web research tasks taking 2–7 minutes, this blocked the single consumer thread of `LightLoop`, preventing any normal commands (`"Open YouTube"`, `"Open Google"`, `"Close Notepad"`) from executing until the research task completed.
+2. **Preserving Ambient Low Latency**: LIGHT's core value proposition is instantaneous, hands-free computer control. Background research must not degrade desktop responsiveness.
+3. **Session Safety & Duplicate Prevention**: Running multiple concurrent Browser Use sessions would cause resource contention, CPU exhaustion, and WebDriver conflicts. Single-active-worker rejection ensures system stability while maintaining responsiveness.
+
+## Consequences
+- **Positive**: Normal desktop and browser commands execute immediately without queuing delays (`queue_wait` <1ms); the user can multitask during long research tasks; emergency STOP and loop teardown safely join the worker thread within bounded timeouts (<300ms on STOP, 500ms on shutdown).
+- **Negative**: Requires thread-safe lifecycle tracking (`_agent_lock`, `_agent_thread`, `state._lock`) and bounded thread join management in `Executor` and `LightLoop`.
+
+## Related Components
+- [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py), [`browser/agent.py`](file:///c:/Projects/LIGHT/browser/agent.py), [`core/state.py`](file:///c:/Projects/LIGHT/core/state.py)

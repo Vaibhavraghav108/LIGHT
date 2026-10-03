@@ -1,6 +1,6 @@
 # LIGHT — Comprehensive Testing Guide
 
-> **Test Suite Baseline**: Running the automated test discovery command discovers **119 tests**: **115 execute and pass**, **0 fail**, **0 errors**, and **4 opt-in host smoke tests skip by default (`OK (skipped=4)`)**.
+> **Test Suite Baseline**: Running the automated test discovery command discovers **127 tests**: **123 execute and pass**, **0 fail**, **0 errors**, and **4 opt-in host smoke tests skip by default (`OK (skipped=4)`)**.
 
 ---
 
@@ -10,7 +10,7 @@ LIGHT employs a multi-tiered test suite to guarantee safety, deterministic accur
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
-│                   LIGHT MULTI-TIER TEST SUITE (119 TESTS)              │
+│                   LIGHT MULTI-TIER TEST SUITE (127 TESTS)              │
 ├────────────────────────────────┬───────────────────────────────────────┤
 │ Tier 1: Deterministic Unit     │ 42 Tests across voice, intent parsing,│
 │ (Isolated Mocks, <1ms parsing) │ desktop apps, screen, and browser.    │
@@ -18,8 +18,8 @@ LIGHT employs a multi-tiered test suite to guarantee safety, deterministic accur
 │ Tier 2: Real Local Browser     │ 5 Headless Playwright integration     │
 │ (ThreadingHTTPServer + DOM)    │ tests against local HTML fixtures.    │
 ├────────────────────────────────┼───────────────────────────────────────┤
-│ Tier 3: Queue, LLM Planning,   │ 68 Tests covering queue, Qwen planner,│
-│ Reliability & Advanced Features│ Browser Use, ranking, and verification│
+│ Tier 3: Queue, LLM Planning,   │ 76 Tests covering queue, Qwen planner,│
+│ Reliability & Advanced Features│ background agent worker, and ranking. │
 ├────────────────────────────────┼───────────────────────────────────────┤
 │ Tier 4: Opt-In Windows Smoke   │ 4 Host environment checks skipped     │
 │ (LIGHT_RUN_WINDOWS_SMOKE=1)    │ by default during automated runs.     │
@@ -31,7 +31,7 @@ LIGHT employs a multi-tiered test suite to guarantee safety, deterministic accur
 ## 2. Test Execution Commands
 
 ### 2.1 Full Automated Discovery Suite (Default CI & Local Baseline)
-Executes all 115 unit and local browser integration tests across the repository:
+Executes all 123 unit and local browser integration tests across the repository:
 
 ```powershell
 .\lightenv\Scripts\python.exe -m unittest discover -s tests -v
@@ -39,7 +39,7 @@ Executes all 115 unit and local browser integration tests across the repository:
 
 **Expected Baseline Output**:
 ```text
-Ran 119 tests in ~24s
+Ran 127 tests in ~27s
 OK (skipped=4)
 ```
 
@@ -60,7 +60,7 @@ Verifies that all Python modules compile cleanly without syntax errors:
 | **Browser Unit** | `tests/test_browser.py` | `python -m unittest tests/test_browser.py -v` | 8 |
 | **Local Browser Integration**| `tests/test_integration_local_browser.py` | `python -m unittest tests/test_integration_local_browser.py -v`| 5 |
 | **V2 Queue & LLM Planning** | `tests/test_queue_and_llm.py` | `python -m unittest tests/test_queue_and_llm.py -v` | 24 |
-| **Reliability & Ownership** | `tests/test_new_features.py` | `python -m unittest tests/test_new_features.py -v` | 44 |
+| **Reliability & Ownership** | `tests/test_new_features.py` | `python -m unittest tests/test_new_features.py -v` | 52 |
 | **Opt-In Windows Smoke** | `tests/test_windows_smoke.py` | `$env:LIGHT_RUN_WINDOWS_SMOKE="1"; python -m unittest tests/test_windows_smoke.py -v` | 4 |
 
 ---
@@ -107,7 +107,7 @@ Verifies that all Python modules compile cleanly without syntax errors:
   - **Test 4**: Result selection by index and window scroll tracking.
   - **Test 5**: Inclusive text range copying, casing preservation, and DOM highlight cleanup (`clear_highlights`).
 
-### Tier 3: Queue, LLM Planning & Feature Reliability (68 Tests)
+### Tier 3: Queue, LLM Planning & Feature Reliability (76 Tests)
 - **`tests/test_queue_and_llm.py` (24 tests)**:
   - Producer-consumer command queue prioritizing `CommandPriority.STOP`.
   - Immediate STOP preemption interrupting active `WAIT` actions.
@@ -117,7 +117,7 @@ Verifies that all Python modules compile cleanly without syntax errors:
   - Local Qwen3 1.7B planning, prompt construction, and plan normalization.
   - Google reCAPTCHA fallback, closed-context browser recovery, and skip button verification.
   - Pruning downstream dependent commands on prerequisite failure.
-- **`tests/test_new_features.py` (44 tests)**:
+- **`tests/test_new_features.py` (52 tests)**:
   - Foreground-aware typing and active window verification (`computer/screen.py`).
   - Windows window controls (minimize, maximize, restore, switch) and media keys.
   - Autonomous browser agent initialization with local Ollama (`qwen3:1.7b`).
@@ -128,6 +128,15 @@ Verifies that all Python modules compile cleanly without syntax errors:
   - Semantic post-click destination verification (`verify_destination`).
   - Browser ownership lifecycle transitions (`NONE` $\to$ `LIGHT` $\to$ `AGENT` $\to$ `NONE`).
   - Concurrent execution of desktop commands while an autonomous agent runs.
+  - **Background Agent Execution (Tests 45–52 / A–H)**:
+    - `test_45_agent_task_runs_in_background_without_blocking_executor`: Verifies `AGENT_TASK` runs in `LIGHT-AgentWorker` thread while executor returns immediately with `"OK"`.
+    - `test_46_normal_commands_execute_immediately_while_agent_runs`: Verifies `"Open YouTube"` and `"Type Hello"` execute with near-zero wait during active agent research.
+    - `test_47_duplicate_agent_task_is_rejected_while_one_is_running`: Verifies duplicate `AGENT_TASK` returns `"REJECTED"` without starting redundant workers.
+    - `test_48_stop_preempts_background_agent_worker`: Verifies voice STOP preemption cancels agent task and joins worker thread within bounded timeout.
+    - `test_49_loop_shutdown_joins_agent_worker`: Verifies consumer loop shutdown cleanly closes and joins background worker without hanging.
+    - `test_50_agent_worker_failure_resets_state`: Verifies worker exception cleanly clears `state.agent_running` and restores ownership.
+    - `test_51_async_loop_executes_normal_command_while_agent_runs`: Verifies async consumer loop executes normal commands while agent runs in background.
+    - `test_52_interleaved_desktop_and_browser_commands_during_agent_task`: Verifies complex interleaved sequences of desktop and browser actions during active background agent task.
 
 ### Tier 4: Opt-In Windows Host Smoke Tests (4 Tests)
 - **`tests/test_windows_smoke.py` (4 tests, skipped by default)**:

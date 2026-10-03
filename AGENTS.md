@@ -61,7 +61,7 @@ For the exhaustive technical specification, data flow diagrams, and component de
 
 ## 3. Core Engineering Principles
 
-Every engineer and AI assistant modifying LIGHT must honor these sixteen foundational principles:
+Every engineer and AI assistant modifying LIGHT must honor these seventeen foundational principles:
 
 1. **Preserve Existing Functionality**: LIGHT is an active, working product. Never break, remove, or degrade existing capabilities.
 2. **Prefer Incremental, Minimal Changes**: Always make the smallest safe change that accomplishes the goal. Avoid sprawling diffs.
@@ -79,6 +79,7 @@ Every engineer and AI assistant modifying LIGHT must honor these sixteen foundat
 14. **Validate Critical Execution Paths**: Changes affecting `core/loop.py`, `core/queue_manager.py`, `core/executor.py`, or `browser/browser.py` require end-to-end testing across both synchronous and asynchronous modes.
 15. **Preserve Local-First Behavior**: LIGHT must function completely offline (or over localhost Ollama). Never introduce mandatory cloud APIs or remote telemetry.
 16. **Do Not Add Cloud Dependencies Casually**: Keep core dependencies lean. Do not add OpenAI, Anthropic, or external cloud SDKs to default execution paths.
+17. **Autonomous Agent Tasks Must Not Block Normal Command Execution**: Long-running exploratory research tasks (`AGENT_TASK`) must execute on a managed background worker (`LIGHT-AgentWorker`). The consumer loop must return immediately and process subsequent desktop and browser commands without waiting for agent completion.
 
 ---
 
