@@ -15,6 +15,8 @@ __pycache__/
 
 # Logs, browser bundles & temporary files
 *.log
+logs/*
+!logs/.gitkeep
 screenshots/
 .playwright-browsers/
 .light_chromium_profile/

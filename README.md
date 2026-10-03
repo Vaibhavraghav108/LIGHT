@@ -1,57 +1,80 @@
-# LIGHT — LLM-Free Voice-Controlled Windows & Browser Automation Assistant
+# LIGHT — Voice-Controlled Windows & Browser Automation Assistant
 
-**LIGHT** is a local, LLM-free voice-controlled automation assistant for Windows. It reads speech-to-text transcriptions from the **Handy** SQLite database, parses commands deterministically via [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py) (with [`Laya`](file:///c:/Projects/LIGHT/brain/laya.py) intent classification as a strict prefix-guarded fallback), and executes actions across Windows desktop utilities (`Notepad`, `Calculator`, `Brave`, `Chrome`), physical mouse/keyboard controls, and a Playwright-controlled browser (`Brave` with automatic fallback to Playwright-managed `Chromium` and `Chrome`).
+[![LIGHT CI](https://github.com/Vaibhavraghav108/LIGHT/actions/workflows/tests.yml/badge.svg)](https://github.com/Vaibhavraghav108/LIGHT/actions/workflows/tests.yml)
+[![Tests: 119 Passed](https://img.shields.io/badge/Tests-119%20passed-brightgreen.svg)](docs/TESTING.md)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-blue.svg)](docs/PRODUCT_SPEC.md)
+[![Architecture: Local--First](https://img.shields.io/badge/Architecture-Local--First-orange.svg)](docs/ARCHITECTURE.md)
+
+**LIGHT** is a local-first, low-latency, voice-controlled Windows and browser automation assistant. It listens continuously to speech-to-text transcriptions from the local **Handy** desktop engine, parses commands through a multi-tier hybrid brain (deterministic fast path in <1ms, local Qwen3 1.7B planning via Ollama, and strict prefix-guarded Laya classification), and executes verified actions across Windows desktop applications, physical mouse/keyboard controls, deterministic Playwright browser automation, and an isolated Browser Use autonomous agent.
 
 ```text
-[Handy SQLite DB] ──► [DecisionEngine + Laya Fallback] ──► [Executor]
-                                                              ├──► [BrowserController (Brave -> Playwright Chromium -> Chrome)]
-                                                              └──► [Computer Controllers (AppController / MouseController / KeyboardController / ScreenController)]
+[Handy SQLite DB] ──► [Thread-Safe CommandQueue] ──► [Hybrid Brain (<1ms Fast Path + Qwen3 1.7B)]
+                                                              │
+                    ┌─────────────────────────────────────────┴────────────────────────────┐
+                    ▼                                                                      ▼
+     [Computer Controllers]                                                      [Browser Controllers]
+  ├── Desktop Apps (Notepad, Calc)                                             ├── Playwright Chromium (LIGHT)
+  ├── Screen & Focus Observation                                               │   └── Result Ranking & Verification
+  └── Keyboard, Mouse & Media Keys                                             └── Browser Use Agent (AGENT)
 ```
 
 ---
 
-## Feature Support Matrix
+## Key Capabilities
 
-| Category | Feature / Capability | Example Voice Commands | Status |
-| :--- | :--- | :--- | :--- |
-| **Voice Loop** | Continuous SQLite polling (`voice/handy.py`), duplicate debouncing (`core/loop.py`), locked/malformed DB recovery | *(Automatic background loop)* | Verified |
-| **Websites** | Open 8 canonical website shortcuts (`youtube`, `google`, `github`, `linkedin`, `gmail`, `chatgpt`, `reddit`, `wikipedia`) or any domain/URL (`https://` auto-normalized) | `"Open YouTube"`, `"Go to github.com"`, `"Open wikipedia"` | Verified |
-| **Context Search** | Context-aware search on YouTube (when active site is YouTube or explicitly specified) and Google fallback | `"Search for Coldplay"`, `"Search YouTube for Python"`, `"Find machine learning"` | Verified |
-| **DOM Clicking** | Semantic DOM element detection via `BrowserController.click_element()` (skips hidden duplicates, scrolls into view, clicks visible control) | `"Click Subscribe"`, `"Click Subscriptions"`, `"Click Ask about files"`, `"Click search bar"` | Verified |
-| **Result Selection** | Click Nth visible search result or video link (`1st` through `5th` or numeric) via `BrowserController.click_result()` | `"Click the first result"`, `"Select second video"`, `"Click result 3"` | Verified |
-| **Precision Mouse (DOM)** | DPI-aware viewport-to-physical screen mapping (`convert_viewport_to_screen`) + closed-loop OS `mousemove` self-calibration (`move_mouse_to_element`) | `"Move mouse to the search bar"`, `"Move mouse onto the Subscribe button"`, `"Move mouse to the first video"` | Verified |
-| **Precision Mouse (Relative/Screen)** | Exact pixel offsets, semantic nudges (`a little`, `slightly`, `a lot`, `far`), screen anchors, click via `MouseController` | `"Move mouse 100 pixels right"`, `"Move mouse slightly up"`, `"Move mouse to center"`, `"Click"` | Verified |
-| **Range Copy & Paste** | Inclusive text range copy (`copy_text_range`) with original casing, clipboard verification (`pyperclip`), and DOM highlight cleanup (`clear_highlights`) | `"Copy from I know this one will hurt till demolish"`, `"Paste"` | Verified |
-| **Page Reading & Navigation** | Read page/window title (`get_title` / `get_active_window_title`), visible page text (`get_visible_text`), scroll, back, forward, refresh | `"Read title"`, `"Read page"`, `"Scroll down"`, `"Go back"`, `"Go forward"`, `"Refresh page"` | Verified |
-| **Keyboard & Typing** | Direct DOM input typing (`type_in_browser`) when browser is active, or OS keyboard typing + key presses (`KeyboardController`) | `"Type Coldplay"`, `"Press enter"`, `"Press escape"` | Verified |
-| **Windows Apps** | Launch and close supported Windows apps (`Notepad`, `Calculator`); `Open Brave`/`Open Chrome` starts LIGHT's one Playwright-controlled browser session, which all browser commands reuse. Closing either voice-browser command closes only that session. | `"Open Notepad"`, `"Close Notepad"`, `"Open Calculator"`, `"Open Brave"`, `"Close Brave"` | Verified |
-| **Safety & Rejection** | Rejects incomplete/malformed commands (`ValueError`) and prevents casual speech from triggering actions or `STOP` | `"Open"` (rejected), `"Search"` (rejected), `"How are you"` (ignored) | Verified |
+- **Ambient Continuous Listening**: Dedicated non-blocking listener thread (`core/loop.py`) continuously ingests speech from Handy SQLite `history.db` at 150ms intervals with monotonic ID ordering and duplicate debouncing.
+- **Sub-Millisecond Deterministic Fast Path**: Instantaneous regex and grammatical parsing (<1ms) for common actions (`"open youtube"`, `"scroll down"`, `"press enter"`, `"mute"`).
+- **Local Small Language Model (Qwen3 1.7B via Ollama)**: Plans complex natural language search and browsing workflows offline without cloud API fees or external latency.
+- **Autonomous Web Research Agent (Browser Use)**: Isolated agent mode for open-ended multi-step exploration and synthesis (`"research 3 Python frameworks and compare them"`).
+- **Strict Browser Ownership Model**: Formally transitions between `NONE`, `LIGHT`, and `AGENT` ownership, preventing controller collisions while allowing concurrent desktop commands during web tasks.
+- **Target Candidate Ranking**: Multi-feature link scoring (+120 domain, +80 slug, +50 target) prioritizing official repositories and primary project documentation over ads and irrelevant links.
+- **Semantic Destination Verification**: Validates landing URLs, domains, and title semantics post-navigation, refusing to report false success.
+- **Immediate STOP Preemption (<5ms)**: Instantaneous cancellation of in-flight wait loops, active browser agents, and queued actions when the user says `"Stop"`, `"Cancel"`, or `"Quit"`.
+- **Focus-Aware Desktop Typing**: Verifies foreground window and application identity before keystrokes are typed, preventing accidental input leakage.
+
+---
+
+## Documentation Suite
+
+Comprehensive system documentation is organized under [`docs/`](docs/):
+
+| Document | Purpose |
+| :--- | :--- |
+| **[`AGENTS.md`](AGENTS.md)** | **Primary AI developer contract**, operational invariants, modification workflows, and forbidden behaviors. |
+| **[`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md)** | Functional and non-functional product requirements, user experience, and core boundaries. |
+| **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** | Complete technical architecture, component dependencies, ownership lifecycles, and data flows. |
+| **[`docs/FEATURES.md`](docs/FEATURES.md)** | Subsystem feature matrix, verified commands, source files, and test mapping. |
+| **[`docs/CHANGELOG.md`](docs/CHANGELOG.md)** | Human-readable milestone evolution history reconstructed from Git commits. |
+| **[`docs/DECISIONS.md`](docs/DECISIONS.md)** | Architecture Decision Records (ADRs) detailing the rationale behind critical engineering decisions. |
+| **[`docs/ROADMAP.md`](docs/ROADMAP.md)** | Completed milestones, current hardening priorities, and planned future improvements. |
+| **[`docs/TESTING.md`](docs/TESTING.md)** | Multi-tier test suite architecture, execution commands, and critical end-to-end verification workflows. |
+| **[`docs/SAFETY.md`](docs/SAFETY.md)** | Operational safety invariants, interruption protocols, and verification rules. |
+| **[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)** | Catalog of historical bugs, root causes, permanent fixes, and regression tests. |
 
 ---
 
 ## Windows Setup & Installation
 
 ### Prerequisites
-1. **Windows 10 / 11** (64-bit) with High-DPI scaling supported via `SetProcessDpiAwareness`.
+1. **Windows 10 / 11** (64-bit) with High-DPI display awareness.
 2. **Python 3.10+** (verified on Python 3.12).
-3. **Browser Runtime**:
-   - **Brave Browser** (checked first via `BRAVE_EXECUTABLE_PATH` or standard `Program Files` / `%LOCALAPPDATA%` paths), **or**
-   - **Playwright-managed Chromium** (automatic fallback when Brave is missing or inaccessible, stored in `.playwright-browsers` or `%LOCALAPPDATA%\ms-playwright`), **or**
-   - **Google Chrome** (`CHROME_EXECUTABLE_PATH` or standard Windows Chrome paths).
-4. **Handy STT Desktop App** (for live microphone dictation) writing transcriptions to `%APPDATA%\com.pais.handy\history.db`.
+3. **Handy Desktop App**: For continuous local voice dictation writing to `%APPDATA%\com.pais.handy\history.db`.
+4. **Ollama**: Running locally with `qwen3:1.7b` for complex natural language planning and autonomous agent tasks:
+   ```powershell
+   ollama run qwen3:1.7b
+   ```
 
-### 1. Create Virtual Environment & Install Dependencies
-From PowerShell inside `c:\Projects\LIGHT`:
+### 1. Environment Setup & Dependencies
+From PowerShell in the project root:
 
 ```powershell
 python -m venv lightenv
 .\lightenv\Scripts\pip.exe install --upgrade pip
 .\lightenv\Scripts\pip.exe install -r requirements.txt
+.\lightenv\Scripts\pip.exe install browser-use==0.13.10 ollama==0.6.1
 ```
 
-### 2. Install Playwright Chromium Fallback
-To ensure `BrowserController` has a working Chromium binary even if Brave is not installed or is blocked by permissions:
-
+### 2. Install Playwright Chromium Browser
 ```powershell
 $env:PLAYWRIGHT_BROWSERS_PATH="c:\Projects\LIGHT\.playwright-browsers"
 .\lightenv\Scripts\playwright.exe install chromium
@@ -61,60 +84,93 @@ $env:PLAYWRIGHT_BROWSERS_PATH="c:\Projects\LIGHT\.playwright-browsers"
 ```powershell
 .\lightenv\Scripts\python.exe main.py
 ```
-Say **"Stop"**, **"Stop light"**, **"Exit"**, **"Exit light"**, **"Quit"**, or **"Quit light"** (or press `Ctrl+C`) to cleanly close the browser session and exit.
+Say **"Stop"**, **"Stop light"**, **"Exit"**, or **"Quit"** (or press `Ctrl+C`) to cleanly exit.
 
 ---
 
 ## Running Tests
 
-See [`TESTING.md`](file:///c:/Projects/LIGHT/TESTING.md) for the complete test breakdown.
+See [`docs/TESTING.md`](docs/TESTING.md) for full testing documentation.
 
-### Static Compilation Check
+### Full Discovery Test Suite (119 Tests)
+```powershell
+.\lightenv\Scripts\python.exe -m unittest discover -s tests -v
+```
+**Baseline Result**: `Ran 119 tests in ~24s` $\to$ `OK (skipped=4)` (115 executed and passed; 4 opt-in Windows host smoke checks skipped by default).
+
+### Static Compilation Syntax Check
 ```powershell
 .\lightenv\Scripts\python.exe -m compileall -q main.py config.py voice brain computer browser core utils tests
 ```
 
-### Default Automated Test Suite (35 Unit Tests + 5 Local Playwright Browser Integration Tests)
-Runs **44 discovered tests**: **40 execute and pass** (`35` unit tests + `5` real headless Playwright browser tests against a local HTTP server) and **4 opt-in Windows smoke tests skip by default**:
-
-```powershell
-.\lightenv\Scripts\python.exe -m unittest discover -s tests -v
-```
-
-### Opt-In Windows Host Smoke Tests (4 Tests)
-Verifies live Windows browser path discovery, system clipboard round-trip (`pyperclip`), `ScreenController` screen/mouse/window observation, and non-destructive `Handy` SQLite read access:
-
+### Opt-In Windows Host Smoke Tests
 ```powershell
 $env:LIGHT_RUN_WINDOWS_SMOKE="1"; .\lightenv\Scripts\python.exe -m unittest tests/test_windows_smoke.py -v
 ```
 
 ---
 
-## Configuration & Environment Variables
+## Repository Structure
 
-All canonical dictionaries (`WEBSITES`, `KNOWN_APPS`, `STOP_COMMANDS`) and runtime settings live in [`config.py`](file:///c:/Projects/LIGHT/config.py):
-
-- `HANDY_DB_PATH`: Path to Handy's `history.db` (default: `%APPDATA%\com.pais.handy\history.db`).
-- `LAYA_MODEL`: Model identifier for `Laya` fallback (default: `convaiinnovations/laya`).
-- `POLL_INTERVAL`: Voice loop polling interval in seconds (default: `0.25`).
-- `DUPLICATE_COOLDOWN_SECONDS`: Cooldown window in seconds to debounce consecutive identical utterances unless repeatable actions (`SCROLL`, `PRESS_KEY`, `CLICK`, `MOVE_MOUSE`, `GO_BACK`, `GO_FORWARD`, `REFRESH`, `PASTE`, `WAIT`) are triggered (default: `1.0`).
-- `BROWSER_TIMEOUT_MS`: Browser operation timeout in milliseconds (default: `5000`).
-- `HIGHLIGHT_DURATION_MS`: Highlight duration for matched elements in milliseconds (default: `3000`).
-- `BROWSER_TYPE_GUARD_MS`: Short browser-input protection window after a `Type ...` command (default: `1200`). It prevents Handy's delayed auto-typing from appending a duplicate value in the controlled browser.
-- `BRAVE_EXECUTABLE_PATH` / `CHROME_EXECUTABLE_PATH`: Optional custom executable path overrides.
-- `PLAYWRIGHT_BROWSERS_PATH`: Path to Playwright browser binaries (automatically defaults to `c:\Projects\LIGHT\.playwright-browsers` when present).
-- `LIGHT_FORCE_KILL_BROWSERS`: Set to `1` to opt in to `taskkill /IM brave.exe /F` (or `chrome.exe`) when closing browsers via `AppController.close()`. By default (`0`/unset), LIGHT closes only browser processes it started.
-- `LIGHT_LOG_LEVEL`: Logging verbosity (`DEBUG`, `INFO`, `WARN`, `ERROR`; default: `INFO`).
-- `LIGHT_RUN_WINDOWS_SMOKE`: Set to `1` to run the 4 opt-in host Windows smoke tests in `tests/test_windows_smoke.py`.
-
----
-
-## Permissions & Known External Limitations
-
-1. **Handy SQLite Database Availability**:
-   - In production (`python main.py`), the external **Handy** STT application must be installed and running so transcriptions are written to `%APPDATA%\com.pais.handy\history.db`.
-   - Disable Handy's **auto-type / type into focused app** option in Handy itself. LIGHT only needs Handy to save transcriptions in its database. That setting is required for duplicate-free typing in desktop applications such as Notepad; LIGHT cannot safely erase text injected by another application into an arbitrary document.
-2. **Browser Process Safety (`Close Brave` / `Close Chrome`)**:
-   - By default, `AppController.close("Brave")` and `AppController.close("Chrome")` terminate only `subprocess.Popen` instances launched by LIGHT (and `Executor` closes LIGHT's active Playwright browser session) without running `taskkill /F`, protecting any personal browser windows open on the desktop.
-3. **Elevated (Administrator) Windows Processes**:
-   - Windows UIPI prevents a non-elevated Python process from sending simulated `PyAutoGUI` mouse/keyboard events to windows running as Administrator.
+```text
+LIGHT/
+├── AGENTS.md                    # Core operating contract for AI coding assistants
+├── README.md                    # Developer-facing project overview
+├── config.py                    # Central configuration and environment settings
+├── main.py                      # Single-instance application entry point
+├── requirements.txt             # Primary Python dependencies
+│
+├── brain/                       # Hybrid Decision Engine
+│   ├── commands.py              # Action enum, Command dataclasses
+│   ├── decision.py              # Deterministic multi-step & single-step parsers
+│   ├── decisions.py             # Backward-compatible re-exports
+│   ├── laya.py                  # Multi-tier orchestrator & Laya classifier
+│   └── llm.py                   # Local Qwen3 1.7B planner via Ollama
+│
+├── browser/                     # Browser Automation
+│   ├── agent.py                 # Subordinate Browser Use autonomous agent
+│   └── browser.py               # Deterministic Playwright Chromium controller
+│
+├── computer/                    # Windows Desktop Subsystem
+│   ├── apps.py                  # Application lifecycle (Notepad, Calc, etc.)
+│   ├── keyboard.py              # Keystrokes, typing, hotkeys
+│   ├── mouse.py                 # Precision cursor homing & physical clicking
+│   └── screen.py                # Window focus observation & window controls
+│
+├── core/                        # Concurrency & Execution Core
+│   ├── executor.py              # Central action dispatcher & ownership routing
+│   ├── loop.py                  # Dedicated background listener & consumer loop
+│   ├── queue_manager.py         # Thread-safe CommandQueue with STOP preemption
+│   └── state.py                 # LightState & BrowserOwnership lifecycle
+│
+├── docs/                        # Complete Engineering Memory System
+│   ├── ARCHITECTURE.md          # Technical architecture & component specs
+│   ├── CHANGELOG.md             # Categorized milestone evolution history
+│   ├── DECISIONS.md             # Architecture Decision Records (ADRs)
+│   ├── FEATURES.md              # Complete subsystem feature inventory
+│   ├── PRODUCT_SPEC.md          # Requirements, UX, and operational boundaries
+│   ├── ROADMAP.md               # Milestones, active hardening & future plans
+│   ├── SAFETY.md                # Safety invariants, preemption, verification
+│   ├── TESTING.md               # Test suite guide & critical workflows
+│   └── TROUBLESHOOTING.md       # Historical defects, root causes & fixes
+│
+├── logs/                        # Runtime execution logs (tracked via .gitkeep)
+│   └── .gitkeep
+│
+├── tests/                       # Multi-Tier Automated Test Suite
+│   ├── test_browser.py          # Browser navigation & reCAPTCHA tests
+│   ├── test_computer.py         # Desktop app, keyboard, and mouse tests
+│   ├── test_integration_local_browser.py # Real headless Playwright DOM tests
+│   ├── test_laya.py             # Deterministic parser & safety guards
+│   ├── test_new_features.py     # Reliability, ranking, verification, agent
+│   ├── test_queue_and_llm.py    # Producer-consumer queue & Qwen planner
+│   ├── test_voice.py            # SQLite reader & voice debouncing tests
+│   └── test_windows_smoke.py    # Opt-in host Windows smoke tests
+│
+├── utils/                       # Shared Utilities
+│   └── logger.py                # Standardized prefix logger ([LIGHT], [PERF], etc.)
+│
+└── voice/                       # Speech Ingestion
+    ├── handy.py                 # SQLite reader for Handy history.db
+    └── handy_voice.py           # Compatibility alias
+```
