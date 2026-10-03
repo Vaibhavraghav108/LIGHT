@@ -314,8 +314,8 @@ class TestNewFeatures(unittest.TestCase):
             self.assertTrue(any(f"LLM endpoint: {LLM_BASE_URL}" in msg for msg in logged_messages))
             self.assertTrue(any("Browser Use initialized" in msg for msg in logged_messages))
 
-    def test_17_agent_task_failure_does_not_report_ok(self):
-        """17. AGENT_TASK failure raises an exception and never falsely reports OK."""
+    def test_17_agent_task_failure_restores_state_and_records_error(self):
+        """17. AGENT_TASK failure restores state and does not leave agent_running active."""
         executor = Executor(state=self.state)
         mock_browser_agent = MagicMock()
         mock_browser_agent.run_task.return_value = {
@@ -326,10 +326,12 @@ class TestNewFeatures(unittest.TestCase):
         executor.browser_agent = mock_browser_agent
 
         cmd = Command(Action.AGENT_TASK, "research quantum computing")
-        with self.assertRaises(RuntimeError) as ctx:
-            executor.execute(cmd)
-        self.assertIn("AGENT_FAILED", str(ctx.exception))
+        res = executor.execute(cmd)
+        self.assertEqual(res, "OK")
+        self.assertTrue(executor.join_agent(timeout=1.0))
         self.assertFalse(self.state.agent_running)
+        self.assertEqual(executor.last_agent_result, "FAILED")
+        self.assertIn("AGENT_FAILED", executor.last_agent_error)
 
     def test_18_agent_task_cancelled_reports_cancelled(self):
         """18. AGENT_TASK cancellation returns CANCELLED and resets agent_running state."""
@@ -842,6 +844,7 @@ class TestNewFeatures(unittest.TestCase):
 
         mock_agent.run_task.side_effect = check_agent_ownership
         executor.execute(Command(Action.AGENT_TASK, "research frameworks"))
+        self.assertTrue(executor.join_agent(timeout=1.0))
 
         # Restores to LIGHT after agent task because browser is active
         self.assertEqual(self.state.get_browser_ownership(), BrowserOwnership.LIGHT.value)
@@ -892,6 +895,347 @@ class TestNewFeatures(unittest.TestCase):
         self.assertFalse(self.state.agent_running)
         self.assertEqual(self.state.get_browser_ownership(), BrowserOwnership.NONE.value)
         executor.browser.close.assert_called_once()
+
+    # ==========================================
+    # BACKGROUND AGENT EXECUTION & PREEMPTION (TESTS A - H)
+    # ==========================================
+
+    def _create_mock_laya(self):
+        mock_laya = MagicMock()
+        def mock_understand(text, state=None):
+            t = text.lower()
+            if "research" in t or "compare" in t:
+                return Command(Action.AGENT_TASK, text)
+            if "open notepad" in t:
+                return Command(Action.OPEN_APP, "notepad")
+            if "close notepad" in t:
+                return Command(Action.CLOSE_APP, "notepad")
+            if "open youtube" in t:
+                return Command(Action.OPEN_URL, "https://youtube.com")
+            if "open google" in t:
+                return Command(Action.OPEN_URL, "https://google.com")
+            if "stop" in t:
+                return Command(Action.STOP, None)
+            return Command(Action.WAIT, "1")
+        mock_laya.understand.side_effect = mock_understand
+        mock_laya.understand_many.side_effect = lambda text, state=None: [mock_understand(text, state)]
+        return mock_laya
+
+    def test_45_agent_task_dispatch_is_non_blocking(self):
+        """A. AGENT_TASK dispatch is non-blocking: execute_next_queued returns immediately."""
+        from core.loop import LightLoop
+
+        agent_started = threading.Event()
+        agent_block = threading.Event()
+
+        mock_agent = MagicMock()
+
+        def slow_agent(*args, **kwargs):
+            agent_started.set()
+            agent_block.wait(timeout=5.0)
+            return {"success": True, "cancelled": False, "final_result": "Done"}
+
+        mock_agent.run_task.side_effect = slow_agent
+
+        executor = Executor(state=self.state)
+        executor.browser_agent = mock_agent
+
+        mock_handy = MagicMock()
+        mock_laya = self._create_mock_laya()
+        loop = LightLoop(handy=mock_handy, laya=mock_laya, executor=executor, state=self.state)
+
+        # Enqueue AGENT_TASK
+        loop.ingest_text("Research three Python AI agent frameworks and compare them")
+
+        t0 = time.perf_counter()
+        res = loop.execute_next_queued(timeout=0.1)
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+        try:
+            self.assertEqual(res, "OK")
+            # Must return in under 50ms (typically <2ms), proving non-blocking dispatch
+            self.assertLess(elapsed_ms, 50.0)
+            # Worker thread is active
+            self.assertTrue(agent_started.wait(timeout=1.0))
+            self.assertTrue(self.state.agent_running)
+        finally:
+            agent_block.set()
+            executor.join_agent(timeout=1.0)
+
+    def test_46_normal_command_while_agent_runs(self):
+        """B. Normal desktop command executes immediately while background agent runs."""
+        from core.loop import LightLoop
+
+        agent_block = threading.Event()
+        mock_agent = MagicMock()
+
+        def slow_agent(*args, **kwargs):
+            agent_block.wait(timeout=5.0)
+            return {"success": True, "cancelled": False, "final_result": "Done"}
+
+        mock_agent.run_task.side_effect = slow_agent
+
+        executor = Executor(state=self.state)
+        executor.browser_agent = mock_agent
+        executor.apps = MagicMock()
+        executor.screen = MagicMock()
+        executor.screen.get_foreground_window_info.return_value = {"title": "Notepad", "process_name": "notepad.exe"}
+
+        mock_handy = MagicMock()
+        mock_laya = self._create_mock_laya()
+        loop = LightLoop(handy=mock_handy, laya=mock_laya, executor=executor, state=self.state)
+
+        # 1. Enqueue AGENT_TASK
+        loop.ingest_text("Research frameworks")
+        # 2. Enqueue normal command
+        loop.ingest_text("Open Notepad")
+
+        try:
+            # Dispatch agent task
+            res_agent = loop.execute_next_queued(timeout=0.1)
+            self.assertEqual(res_agent, "OK")
+            self.assertTrue(self.state.agent_running)
+
+            # Next command: Open Notepad must execute immediately without waiting for agent
+            t0 = time.perf_counter()
+            res_notepad = loop.execute_next_queued(timeout=0.1)
+            notepad_ms = (time.perf_counter() - t0) * 1000.0
+
+            self.assertEqual(res_notepad, "OK")
+            self.assertLess(notepad_ms, 50.0)
+            executor.apps.open.assert_called_once()
+            self.assertEqual(self.state.current_app, "notepad")
+            # Agent should still be running in the background
+            self.assertTrue(self.state.agent_running)
+        finally:
+            agent_block.set()
+            executor.join_agent(timeout=1.0)
+
+    def test_47_multiple_normal_commands_execute_in_queue_order_during_agent_task(self):
+        """C. Multiple normal commands execute in queue order with low latency while agent runs."""
+        from core.loop import LightLoop
+
+        agent_block = threading.Event()
+        mock_agent = MagicMock()
+
+        def slow_agent(*args, **kwargs):
+            agent_block.wait(timeout=5.0)
+            return {"success": True, "cancelled": False, "final_result": "Done"}
+
+        mock_agent.run_task.side_effect = slow_agent
+
+        executor = Executor(state=self.state)
+        executor.browser_agent = mock_agent
+        executor.browser = MagicMock()
+        executor.browser.is_active.return_value = True
+        executor.apps = MagicMock()
+
+        mock_handy = MagicMock()
+        mock_laya = self._create_mock_laya()
+        loop = LightLoop(handy=mock_handy, laya=mock_laya, executor=executor, state=self.state)
+
+        # Ingest agent task then multiple normal commands
+        loop.ingest_text("Research frameworks")
+        loop.ingest_text("Open YouTube")
+        loop.ingest_text("Open Google")
+        loop.ingest_text("Close Notepad")
+
+        execution_order = []
+
+        executor.browser.open_url.side_effect = lambda url: execution_order.append(f"url:{url}")
+        executor.apps.close.side_effect = lambda app: execution_order.append(f"close:{app}")
+
+        try:
+            # 1. Dispatch agent task
+            res0 = loop.execute_next_queued(timeout=0.1)
+            self.assertEqual(res0, "OK")
+
+            # 2. Open YouTube
+            res1 = loop.execute_next_queued(timeout=0.1)
+            self.assertEqual(res1, "OK")
+
+            # 3. Open Google
+            res2 = loop.execute_next_queued(timeout=0.1)
+            self.assertEqual(res2, "OK")
+
+            # 4. Close Notepad
+            res3 = loop.execute_next_queued(timeout=0.1)
+            self.assertEqual(res3, "OK")
+
+            # Verify exact order
+            self.assertEqual(
+                execution_order,
+                ["url:https://youtube.com", "url:https://google.com", "close:notepad"],
+            )
+        finally:
+            agent_block.set()
+            executor.join_agent(timeout=1.0)
+
+    def test_48_stop_preemption_cancels_background_agent_within_bounded_time(self):
+        """D. STOP preemption cancels running background agent and resets state within bounded time."""
+        from core.loop import LightLoop
+        from core.state import BrowserOwnership
+
+        agent_started = threading.Event()
+        mock_agent = MagicMock()
+
+        def slow_agent(*args, **kwargs):
+            agent_started.set()
+            cancel_evt = kwargs.get("cancel_event")
+            if cancel_evt:
+                cancel_evt.wait(timeout=5.0)
+            return {"success": False, "cancelled": True, "final_result": "CANCELLED"}
+
+        mock_agent.run_task.side_effect = slow_agent
+
+        executor = Executor(state=self.state)
+        executor.browser_agent = mock_agent
+        executor.browser = MagicMock()
+
+        mock_handy = MagicMock()
+        mock_laya = self._create_mock_laya()
+        loop = LightLoop(handy=mock_handy, laya=mock_laya, executor=executor, state=self.state)
+
+        loop.ingest_text("Research frameworks")
+        loop.execute_next_queued(timeout=0.1)
+        self.assertTrue(agent_started.wait(timeout=1.0))
+        self.assertTrue(self.state.agent_running)
+
+        # Issue STOP
+        loop.ingest_text("stop")
+
+        t0 = time.perf_counter()
+        res_stop = loop.execute_next_queued(timeout=0.1)
+        stop_ms = (time.perf_counter() - t0) * 1000.0
+
+        self.assertEqual(res_stop, "STOP")
+        # STOP preemption must be bounded and fast (under 300ms)
+        self.assertLess(stop_ms, 300.0)
+        mock_agent.cancel.assert_called_once()
+        self.assertFalse(self.state.agent_running)
+        self.assertEqual(self.state.get_browser_ownership(), BrowserOwnership.NONE.value)
+        self.assertTrue(executor.join_agent(timeout=0.5))
+
+    def test_49_duplicate_agent_task_rejected_while_active(self):
+        """E. Duplicate AGENT_TASK while an agent is active is rejected with clear logging."""
+        from core.loop import LightLoop
+
+        agent_block = threading.Event()
+        mock_agent = MagicMock()
+
+        def slow_agent(*args, **kwargs):
+            agent_block.wait(timeout=5.0)
+            return {"success": True, "cancelled": False, "final_result": "Done"}
+
+        mock_agent.run_task.side_effect = slow_agent
+
+        executor = Executor(state=self.state)
+        executor.browser_agent = mock_agent
+
+        mock_handy = MagicMock()
+        mock_laya = self._create_mock_laya()
+        loop = LightLoop(handy=mock_handy, laya=mock_laya, executor=executor, state=self.state)
+
+        # 1. First agent task
+        loop.ingest_text("Research frameworks")
+        res1 = loop.execute_next_queued(timeout=0.1)
+        self.assertEqual(res1, "OK")
+        self.assertTrue(self.state.agent_running)
+
+        try:
+            # 2. Duplicate agent task
+            loop.ingest_text("Compare React and Vue")
+            res2 = loop.execute_next_queued(timeout=0.1)
+            self.assertEqual(res2, "REJECTED")
+
+            # Ensure run_task was invoked only once
+            self.assertEqual(mock_agent.run_task.call_count, 1)
+            self.assertTrue(self.state.agent_running)
+        finally:
+            agent_block.set()
+            executor.join_agent(timeout=1.0)
+
+    def test_50_agent_completion_restores_state_safely(self):
+        """F. Successful agent completion restores correct state and ownership."""
+        from core.state import BrowserOwnership
+
+        executor = Executor(state=self.state)
+        mock_agent = MagicMock()
+        mock_agent.run_task.return_value = {
+            "success": True,
+            "cancelled": False,
+            "final_result": "AGENT_COMPLETED: Research finished.",
+        }
+        executor.browser_agent = mock_agent
+
+        cmd = Command(Action.AGENT_TASK, "research quantum computing")
+        res = executor.execute(cmd)
+        self.assertEqual(res, "OK")
+
+        # Wait for worker thread to complete
+        self.assertTrue(executor.join_agent(timeout=1.0))
+        self.assertFalse(self.state.agent_running)
+        self.assertEqual(executor.last_agent_result, "COMPLETED")
+        self.assertIsNone(executor.last_agent_error)
+        self.assertEqual(self.state.get_browser_ownership(), BrowserOwnership.NONE.value)
+
+    def test_51_agent_failure_restores_state_safely(self):
+        """G. Agent failure restores correct state and records failure."""
+        from core.state import BrowserOwnership
+
+        executor = Executor(state=self.state)
+        mock_agent = MagicMock()
+        mock_agent.run_task.return_value = {
+            "success": False,
+            "cancelled": False,
+            "final_result": "AGENT_FAILED: Out of memory",
+        }
+        executor.browser_agent = mock_agent
+
+        cmd = Command(Action.AGENT_TASK, "research quantum computing")
+        res = executor.execute(cmd)
+        self.assertEqual(res, "OK")
+
+        self.assertTrue(executor.join_agent(timeout=1.0))
+        self.assertFalse(self.state.agent_running)
+        self.assertEqual(executor.last_agent_result, "FAILED")
+        self.assertEqual(executor.last_agent_error, "AGENT_FAILED: Out of memory")
+        self.assertEqual(self.state.get_browser_ownership(), BrowserOwnership.NONE.value)
+
+    def test_52_shutdown_cancels_active_agent_with_bounded_cleanup(self):
+        """H. Shutdown cancels active agent worker and joins with bounded timeout."""
+        from core.state import BrowserOwnership
+
+        agent_block = threading.Event()
+        mock_agent = MagicMock()
+
+        def slow_agent(*args, **kwargs):
+            agent_block.wait(timeout=5.0)
+            return {"success": False, "cancelled": True, "final_result": "CANCELLED"}
+
+        mock_agent.run_task.side_effect = slow_agent
+
+        executor = Executor(state=self.state)
+        executor.browser_agent = mock_agent
+        executor.browser = MagicMock()
+
+        # Start agent
+        cmd = Command(Action.AGENT_TASK, "research quantum computing")
+        res = executor.execute(cmd)
+        self.assertEqual(res, "OK")
+        self.assertTrue(self.state.agent_running)
+
+        # Trigger shutdown
+        t0 = time.perf_counter()
+        executor.close(timeout=0.3)
+        shutdown_ms = (time.perf_counter() - t0) * 1000.0
+
+        # Shutdown must be bounded (e.g. <500ms) and not hang indefinitely
+        self.assertLess(shutdown_ms, 500.0)
+        mock_agent.cancel.assert_called_once()
+        self.assertFalse(self.state.agent_running)
+        self.assertEqual(self.state.get_browser_ownership(), BrowserOwnership.NONE.value)
+        agent_block.set()
 
 
 if __name__ == "__main__":
