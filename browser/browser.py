@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -79,6 +80,7 @@ class BrowserController:
         self.active_browser_label: str | None = None
         self.active_executable_path: str | None = None
         self._skip_persistent_context: bool = False
+        self.last_search_query: str | None = None
 
     # ==========================================
     # FIND BROWSER & FALLBACK CANDIDATES
@@ -370,15 +372,26 @@ class BrowserController:
             self.browser = old_browser
             self.context = old_context
 
-    def _safe_goto(self, url: str, wait_until: str = "domcontentloaded"):
+    def _safe_goto(self, url: str, wait_until: str = "domcontentloaded", timeout: float | None = None):
         """Navigate to `url`, automatically recovering once if the page/context was closed."""
         self.start()
+        kwargs = {"wait_until": wait_until}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
         try:
-            self.page.goto(url, wait_until=wait_until)
+            self.page.goto(url, **kwargs)
         except Exception as err:
+            err_msg = str(err).lower()
+            if "timeout" in err_msg and wait_until != "commit":
+                try:
+                    log_debug(f"Navigation timed out with wait_until='{wait_until}', falling back to 'commit'...")
+                    self.page.goto(url, wait_until="commit", timeout=timeout or 5000)
+                    return
+                except Exception:
+                    pass
             if self._is_target_closed_error(err) or not self.is_active():
                 self._recover_closed_browser()
-                self.page.goto(url, wait_until=wait_until)
+                self.page.goto(url, **kwargs)
             else:
                 raise
 
@@ -390,6 +403,12 @@ class BrowserController:
             if engine == "youtube":
                 self.page.wait_for_selector(
                     "ytd-video-renderer a#video-title, ytd-rich-item-renderer a#video-title-link, yt-lockup-view-model a[href^='/watch'], a#video-title",
+                    state="visible",
+                    timeout=5000,
+                )
+            elif engine == "github":
+                self.page.wait_for_selector(
+                    'div[data-testid="results-list"], a[data-testid="search-result-title"], ul.repo-list',
                     state="visible",
                     timeout=5000,
                 )
@@ -529,21 +548,148 @@ class BrowserController:
         self._unfocus_inputs()
 
     # ==========================================
-    # SEARCH (GOOGLE / YOUTUBE)
+    # MEDIA CONTROL (HTML5 / YOUTUBE)
+    # ==========================================
+
+    def has_video_element(self) -> bool:
+        """Return True if the current page contains an HTML5 video element."""
+        if not self.is_active() or not self.page:
+            return False
+        try:
+            return bool(self.page.evaluate("() => !!document.querySelector('video')"))
+        except Exception:
+            return False
+
+    def media_play_pause(self) -> str:
+        """Toggle play/pause on the page's video element without typing into search boxes."""
+        self.start()
+        self._unfocus_inputs()
+        res = self.page.evaluate(
+            """() => {
+                const v = document.querySelector('video');
+                if (!v) return 'no_video';
+                if (v.paused) {
+                    v.play();
+                    return 'played';
+                } else {
+                    v.pause();
+                    return 'paused';
+                }
+            }"""
+        )
+        log_browser(f"Media play/pause: {res}")
+        return res
+
+    def media_seek(self, seconds: float) -> float | None:
+        """Seek forward (positive seconds) or backward (negative seconds)."""
+        self.start()
+        self._unfocus_inputs()
+        res = self.page.evaluate(
+            """(delta) => {
+                const v = document.querySelector('video');
+                if (!v) return null;
+                const newTime = Math.max(0, Math.min(v.duration || Infinity, v.currentTime + delta));
+                v.currentTime = newTime;
+                return newTime;
+            }""",
+            float(seconds),
+        )
+        log_browser(f"Media seek delta={seconds}s -> new_time={res}")
+        return res
+
+    def media_fullscreen(self, enable: bool = True) -> bool:
+        """Enter or exit fullscreen for video or page."""
+        self.start()
+        self._unfocus_inputs()
+        res = self.page.evaluate(
+            """(enable) => {
+                const fsBtn = document.querySelector('button.ytp-fullscreen-button');
+                const isFs = !!document.fullscreenElement;
+                if (enable) {
+                    if (!isFs) {
+                        if (fsBtn) { fsBtn.click(); return true; }
+                        const v = document.querySelector('video');
+                        if (v && v.requestFullscreen) { v.requestFullscreen(); return true; }
+                    }
+                } else {
+                    if (isFs) {
+                        if (fsBtn) { fsBtn.click(); return true; }
+                        if (document.exitFullscreen) { document.exitFullscreen(); return true; }
+                    }
+                }
+                return false;
+            }""",
+            enable,
+        )
+        log_browser(f"Media fullscreen (enable={enable}) -> {res}")
+        return bool(res)
+
+    def media_mute(self) -> bool:
+        """Toggle audio mute on the video element."""
+        self.start()
+        self._unfocus_inputs()
+        res = self.page.evaluate(
+            """() => {
+                const v = document.querySelector('video');
+                if (!v) return false;
+                v.muted = !v.muted;
+                return v.muted;
+            }"""
+        )
+        log_browser(f"Media mute toggled -> muted={res}")
+        return bool(res)
+
+    def media_next(self) -> bool:
+        """Skip to next video (e.g. YouTube next button)."""
+        self.start()
+        self._unfocus_inputs()
+        res = self.page.evaluate(
+            """() => {
+                const nextBtn = document.querySelector('a.ytp-next-button');
+                if (nextBtn) { nextBtn.click(); return true; }
+                const v = document.querySelector('video');
+                if (v && v.duration) { v.currentTime = v.duration; return true; }
+                return false;
+            }"""
+        )
+        log_browser(f"Media next -> {res}")
+        return bool(res)
+
+    def media_previous(self) -> bool:
+        """Skip to previous video (e.g. YouTube prev button)."""
+        self.start()
+        self._unfocus_inputs()
+        res = self.page.evaluate(
+            """() => {
+                const prevBtn = document.querySelector('a.ytp-prev-button');
+                if (prevBtn) { prevBtn.click(); return true; }
+                const v = document.querySelector('video');
+                if (v) { v.currentTime = 0; return true; }
+                return false;
+            }"""
+        )
+        log_browser(f"Media previous -> {res}")
+        return bool(res)
+
+    # ==========================================
+    # SEARCH (GOOGLE / YOUTUBE / GITHUB)
     # ==========================================
 
     def search(self, query: str, engine: str | None = None):
-        """Search on YouTube or Google using Playwright."""
+        """Search on YouTube, GitHub, or Google using Playwright."""
         self.start()
 
         query = query.strip()
         if not query:
             raise ValueError("Search query cannot be empty.")
+        self.last_search_query = query
 
         current_url = (self.page.url or "").lower()
         if engine is None:
             if "youtube.com" in current_url:
                 engine = "youtube"
+            elif "github.com" in current_url:
+                engine = "github"
             else:
                 engine = "google"
 
@@ -551,8 +697,37 @@ class BrowserController:
 
         if engine == "youtube":
             self.search_youtube(query)
+        elif engine == "github":
+            self.search_github(query)
         else:
             self.search_google(query)
+
+    def search_github(self, query: str):
+        self.start()
+        log_browser(f"Searching GitHub for: {query}")
+
+        current_url = (self.page.url or "").lower()
+        if "github.com" in current_url:
+            try:
+                search_btn = self.page.locator("button.header-search-button, [data-target='qbsearch-input.inputButton']").first
+                if search_btn.is_visible(timeout=1500):
+                    search_btn.click()
+                search_input = self.page.locator("input#query-builder-test, input[name='query-builder-test'], input[name='q'], [data-target='qbsearch-input.input']").first
+                if search_input.is_visible(timeout=1500):
+                    search_input.click()
+                    search_input.fill(query)
+                    search_input.press("Enter")
+                    self.page.wait_for_load_state("domcontentloaded")
+                    self._wait_for_search_results("github")
+                    self._unfocus_inputs()
+                    return
+            except Exception as err:
+                log_debug(f"GitHub DOM search box fallback: {err}")
+
+        search_url = f"https://github.com/search?q={quote_plus(query)}&type=repositories"
+        self._safe_goto(search_url, wait_until="domcontentloaded")
+        self._wait_for_search_results("github")
+        self._unfocus_inputs()
 
     def search_youtube(self, query: str):
         self.start()
@@ -639,7 +814,8 @@ class BrowserController:
     # TARGET PARSING & COORDINATE CONVERSION
     # ==========================================
 
-    def parse_element_target(self, raw_target: str) -> dict:
+    @staticmethod
+    def parse_element_target(raw_target: str) -> dict:
         cleaned = (raw_target or "").strip()
         for prefix in ("onto the ", "onto ", "to the ", "to ", "over the ", "over ", "on the ", "on ", "at the ", "at "):
             if cleaned.lower().startswith(prefix):
@@ -673,6 +849,34 @@ class BrowserController:
                 "kind": "nth_short",
                 "index": RESULT_ORDINAL_MAP[nth_short_match.group(1)],
                 "semantic": "link",
+            }
+
+        if lower in RESULT_ORDINAL_MAP:
+            return {
+                "kind": "nth_result",
+                "index": RESULT_ORDINAL_MAP[lower],
+                "semantic": "link",
+            }
+
+        nth_elem_match = re.match(
+            r"^(?:the\s+)?(?:(\w+)\s+(?:clickable\s+)?element|element\s+(\w+))$",
+            lower,
+        )
+        if nth_elem_match:
+            tok = nth_elem_match.group(1) or nth_elem_match.group(2)
+            if tok in RESULT_ORDINAL_MAP:
+                return {
+                    "kind": "nth_clickable",
+                    "index": RESULT_ORDINAL_MAP[tok],
+                    "semantic": "clickable",
+                }
+
+        if lower.startswith("official "):
+            return {
+                "kind": "named_result",
+                "query": cleaned,
+                "semantic": "link",
+                "index": 1,
             }
 
         nth_match = re.match(
@@ -776,7 +980,12 @@ class BrowserController:
 
         return clamped_x, clamped_y
 
-    def locate_element_in_viewport(self, target: str, perform_click: bool = False) -> dict:
+    def locate_element_in_viewport(
+        self,
+        target: str,
+        perform_click: bool = False,
+        search_context: str | None = None,
+    ) -> dict:
         self.start()
         try:
             self.page.bring_to_front()
@@ -803,6 +1012,8 @@ class BrowserController:
             "semantic": semantic,
             "index": index,
             "performClick": perform_click,
+            "searchContext": (search_context or getattr(self, "last_search_query", "") or "").strip(),
+            "targetQuery": query,
         }
 
         info = self.page.evaluate(
@@ -876,6 +1087,7 @@ class BrowserController:
                         pre_text: preText,
                         pre_ad_showing: preAdShowing,
                         pre_url: window.location.href,
+                        target_href: (clickable.getAttribute('href') || clickable.href || '').trim(),
                         rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
                         matched: (preText || clickable.getAttribute('aria-label') || clickable.getAttribute('title') || clickable.getAttribute('placeholder') || clickable.tagName || '').trim().slice(0, 60),
                         window_metrics: getWindowMetrics()
@@ -940,6 +1152,25 @@ class BrowserController:
                         const chosen = videoNodes[Math.max(0, params.index - 1)];
                         if (!chosen) return { found: false };
                         return computeSafePoint(chosen);
+                    } else if (url.includes('github.com')) {
+                        const ghSelectors = [
+                            'div[data-testid="results-list"] h3 a',
+                            'div[data-testid="results-list"] div[role="listitem"] a[href*="/"]',
+                            'a[data-testid="search-result-title"]',
+                            'div[data-testid="results-list"] a[href]',
+                            'ul.repo-list li a[href]',
+                            'div.search-title a'
+                        ].join(', ');
+                        const ghNodes = Array.from(document.querySelectorAll(ghSelectors)).filter(el => {
+                            if (!isVisible(el)) return false;
+                            const h = (el.getAttribute('href') || el.href || '').toLowerCase();
+                            if (!h || h.startsWith('#') || h.startsWith('javascript:')) return false;
+                            if (h.includes('/search') || h.includes('/settings') || h.includes('/notifications') || h.includes('/explore')) return false;
+                            return true;
+                        });
+                        const chosen = ghNodes[Math.max(0, params.index - 1)];
+                        if (!chosen) return { found: false };
+                        return computeSafePoint(chosen);
                     }
                     let selectors = 'a:has(h3), div#search a h3, a[data-testid="result-title-a"], article h2 a, main a[href], article a[href], a[href]';
                     if (url.includes('google.com')) {
@@ -951,6 +1182,181 @@ class BrowserController:
                     const chosen = nodes[Math.max(0, params.index - 1)];
                     if (!chosen) return { found: false };
                     return computeSafePoint(chosen);
+                }
+
+                // 2c. NTH CLICKABLE ELEMENT (e.g. "click the first element", "first element")
+                if (params.kind === 'nth_clickable') {
+                    const url = window.location.href.toLowerCase();
+                    const isSearchOrVideoPage = (
+                        url.includes('google.') ||
+                        url.includes('youtube.com') ||
+                        url.includes('github.com') ||
+                        url.includes('duckduckgo.') ||
+                        url.includes('bing.com')
+                    );
+
+                    if (url.includes('youtube.com')) {
+                        const ytNodes = Array.from(document.querySelectorAll(
+                            'ytd-video-renderer a#video-title, ytd-video-renderer a[href^="/watch?v="], yt-lockup-view-model a[href^="/watch?v="], ytd-rich-item-renderer a#video-title-link'
+                        )).filter(el => isVisible(el) && !el.closest('ytd-mini-guide-entry-renderer, ytd-guide-entry-renderer, #guide'));
+                        if (ytNodes.length > 0) {
+                            const chosen = ytNodes[Math.max(0, params.index - 1)];
+                            if (chosen) return computeSafePoint(chosen);
+                        }
+                    } else if (url.includes('github.com')) {
+                        const ghNodes = Array.from(document.querySelectorAll(
+                            'div[data-testid="results-list"] h3 a, div[data-testid="results-list"] div[role="listitem"] a[href*="/"], a[data-testid="search-result-title"], div[data-testid="results-list"] a[href], ul.repo-list li a[href]'
+                        )).filter(el => {
+                            if (!isVisible(el)) return false;
+                            const h = (el.getAttribute('href') || el.href || '').toLowerCase();
+                            if (!h || h.startsWith('#') || h.startsWith('javascript:')) return false;
+                            if (h.includes('/search') || h.includes('/settings') || h.includes('/notifications') || h.includes('/explore')) return false;
+                            return true;
+                        });
+                        if (ghNodes.length > 0) {
+                            const chosen = ghNodes[Math.max(0, params.index - 1)];
+                            if (chosen) return computeSafePoint(chosen);
+                        }
+                    } else if (isSearchOrVideoPage) {
+                        const searchNodes = Array.from(document.querySelectorAll(
+                            'a:has(h3), div#search a h3, a[data-testid="result-title-a"], article h2 a, h2 a'
+                        )).filter(isVisible);
+                        if (searchNodes.length > 0) {
+                            const chosen = searchNodes[Math.max(0, params.index - 1)];
+                            if (chosen) return computeSafePoint(chosen);
+                        }
+                    }
+
+                    const interactiveSelectors = 'button, a[href], [role="button"], [role="link"], input[type="button"], input[type="submit"], input[type="reset"]';
+                    const allInteractive = Array.from(document.querySelectorAll(interactiveSelectors)).filter(isVisible);
+
+                    allInteractive.sort((a, b) => {
+                        const ra = a.getBoundingClientRect();
+                        const rb = b.getBoundingClientRect();
+                        if (Math.abs(ra.top - rb.top) > 15) return ra.top - rb.top;
+                        return ra.left - rb.left;
+                    });
+
+                    const chosen = allInteractive[Math.max(0, params.index - 1)];
+                    if (!chosen) {
+                        return { found: false, error: 'No visible interactive element found at index ' + params.index };
+                    }
+                    return computeSafePoint(chosen);
+                }
+
+                // 2d. NAMED SEARCH RESULT (e.g. "official repository", "official docs", "official website")
+                if (params.kind === 'named_result') {
+                    const url = window.location.href.toLowerCase();
+                    const isGitHubPage = url.includes('github.com');
+                    const targetLower = (params.targetQuery || '').toLowerCase();
+                    const ctxLower = (params.searchContext || '').toLowerCase();
+
+                    const isRepo = targetLower.includes('repo') || targetLower.includes('repository') || targetLower.includes('github') || targetLower.includes('code');
+                    const isDocs = targetLower.includes('doc') || targetLower.includes('documentation') || targetLower.includes('guide') || targetLower.includes('manual') || targetLower.includes('api');
+                    const isSite = targetLower.includes('site') || targetLower.includes('website') || targetLower.includes('page') || targetLower.includes('official');
+
+                    const resultSelectors = [
+                        'div[data-testid="results-list"] h3 a',
+                        'div[data-testid="results-list"] div[role="listitem"] a[href*="/"]',
+                        'div[data-testid="results-list"] a[href*="/"]',
+                        'a[data-testid="search-result-title"]',
+                        'ul.repo-list li a',
+                        'div.search-title a',
+                        'div#search a:has(h3)',
+                        'div#rso a:has(h3)',
+                        'a:has(h3)',
+                        'a[data-testid="result-title-a"]',
+                        'article h2 a',
+                        'h2 a',
+                        'div#search a[href]',
+                        'div.g a[href]',
+                        'main a[href]'
+                    ].join(', ');
+
+                    const candidateLinks = Array.from(document.querySelectorAll(resultSelectors)).filter(el => {
+                        if (!isVisible(el)) return false;
+                        const h = (el.getAttribute('href') || el.href || '').toLowerCase();
+                        if (!h || h.startsWith('javascript:') || h.startsWith('#')) return false;
+                        if (h.includes('google.com/search') || h.includes('google.com/preferences') || h.includes('accounts.google.com') || h.includes('support.google.com')) return false;
+                        if (h.includes('github.com/search') || h.includes('github.com/settings') || h.includes('github.com/notifications') || h.includes('github.com/explore')) return false;
+                        return true;
+                    });
+
+                    let bestEl = null;
+                    let bestScore = -Infinity;
+
+                    const ctxTokens = ctxLower.split(/[^a-z0-9]+/).filter(w => w.length > 2);
+
+                    for (let i = 0; i < candidateLinks.length; i++) {
+                        const el = candidateLinks[i];
+                        const href = (el.getAttribute('href') || el.href || '').toLowerCase();
+                        const inner = (el.innerText || el.textContent || '').toLowerCase();
+                        const h3 = el.querySelector('h3');
+                        const h3Text = h3 ? (h3.innerText || '').toLowerCase() : '';
+                        const parent = el.closest('div.g, div[data-hveid], article, li, div[data-testid="result"], div[role="listitem"]');
+                        const snippet = parent ? (parent.innerText || '').toLowerCase() : '';
+                        const combined = `${href} ${inner} ${h3Text} ${snippet}`;
+
+                        let score = 0;
+                        score += Math.max(0, 30 - i * 4);
+
+                        for (const tok of ctxTokens) {
+                            if (combined.includes(tok)) score += 30;
+                            if (href.includes(tok)) score += 35;
+                            if (h3Text.includes(tok) || inner.includes(tok)) score += 35;
+                        }
+
+                        if (isRepo) {
+                            if (href.includes('github.com') || href.includes('gitlab.com') || isGitHubPage) {
+                                score += 120;
+                            }
+                            if (combined.includes('github') || combined.includes('repository') || combined.includes('repo')) {
+                                score += 40;
+                            }
+                            // Exact repo slug match e.g. /langchain-ai/langgraph or /langgraph
+                            for (const tok of ctxTokens) {
+                                if (href.endsWith('/' + tok) || href.includes('/' + tok + '/') || href.includes('/' + tok)) {
+                                    score += 80;
+                                }
+                            }
+                            if (targetLower.includes('official')) {
+                                for (const tok of ctxTokens) {
+                                    if (href.includes(tok)) score += 50;
+                                }
+                            }
+                            if (href.includes('twitter.com') || href.includes('x.com') || href.includes('linkedin.com') || href.includes('facebook.com') || href.includes('reddit.com') || href.includes('medium.com')) {
+                                score -= 100;
+                            }
+                        }
+
+                        if (isDocs) {
+                            if (href.includes('docs.') || href.includes('/docs') || href.includes('readthedocs') || href.includes('documentation')) {
+                                score += 100;
+                            }
+                            if (combined.includes('documentation') || combined.includes('docs') || combined.includes('api reference')) {
+                                score += 40;
+                            }
+                        }
+
+                        if (isSite && !isRepo) {
+                            if (combined.includes('official') || combined.includes('home page') || combined.includes('overview')) {
+                                score += 50;
+                            }
+                            if (ctxTokens.length > 0 && ctxTokens.some(tok => href.includes(tok + '.org') || href.includes(tok + '.com') || href.includes(tok + '.io') || href.includes(tok + '.dev'))) {
+                                score += 80;
+                            }
+                        }
+
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestEl = el;
+                        }
+                    }
+
+                    if (!bestEl || bestScore < 20) {
+                        return { found: false, error: 'Could not find a high-confidence search result matching ' + targetLower };
+                    }
+                    return computeSafePoint(bestEl);
                 }
 
                 // 2b. YOUTUBE AD SKIP BUTTON PRIORITY
@@ -1091,7 +1497,8 @@ class BrowserController:
         )
 
         if not info or not info.get("found"):
-            raise ValueError(f"Could not find a visible element matching '{target}'.")
+            err_msg = info.get("error") if (isinstance(info, dict) and info.get("error")) else f"Could not find a visible element matching '{target}'."
+            raise RuntimeError(err_msg)
 
         return info
 
@@ -1119,9 +1526,14 @@ class BrowserController:
         )
         return screen_x, screen_y
 
-    def move_mouse_to_element(self, target: str, mouse_controller) -> tuple[int, int]:
+    def move_mouse_to_element(
+        self,
+        target: str,
+        mouse_controller,
+        search_context: str | None = None,
+    ) -> tuple[int, int]:
         screen_size = mouse_controller.get_screen_size()
-        info = self.locate_element_in_viewport(target)
+        info = self.locate_element_in_viewport(target, search_context=search_context)
         vp_x = float(info["vp_x"])
         vp_y = float(info["vp_y"])
         metrics = info.get("window_metrics", {})
@@ -1214,6 +1626,7 @@ class BrowserController:
         target: str,
         mouse_controller=None,
         require_skip_verification: bool = False,
+        search_context: str | None = None,
     ) -> dict:
         """
         Execute the complete LOCATE -> MOVE -> VERIFY CURSOR -> PHYSICAL CLICK -> VERIFY pipeline:
@@ -1241,8 +1654,8 @@ class BrowserController:
                 pass
 
         if mouse_controller is not None:
-            est_x, est_y = self.move_mouse_to_element(target, mouse_controller)
-            info = self.locate_element_in_viewport(target, perform_click=False)
+            est_x, est_y = self.move_mouse_to_element(target, mouse_controller, search_context=search_context)
+            info = self.locate_element_in_viewport(target, perform_click=False, search_context=search_context)
             vp_x = float(info["vp_x"])
             vp_y = float(info["vp_y"])
             screen_size = mouse_controller.get_screen_size()
@@ -1278,7 +1691,7 @@ class BrowserController:
             else:
                 mouse_controller.click()
         else:
-            info = self.locate_element_in_viewport(target, perform_click=False)
+            info = self.locate_element_in_viewport(target, perform_click=False, search_context=search_context)
             vp_x = float(info["vp_x"])
             vp_y = float(info["vp_y"])
             est_x, est_y = int(vp_x), int(vp_y)
@@ -1420,9 +1833,12 @@ class BrowserController:
                     f"Click verification failed for '{target}': Skip button remained visible and unchanged after physical click."
                 )
 
-    def click_result(self, index: int = 1, mouse_controller=None):
-        if index < 1:
-            index = 1
+    def click_result(
+        self,
+        index: int | str = 1,
+        mouse_controller=None,
+        search_context: str | None = None,
+    ):
         if self.page is not None:
             current_url = str(getattr(self.page, "url", "") or "").strip().lower()
             if current_url == "about:blank":
@@ -1431,12 +1847,117 @@ class BrowserController:
                 )
             if "youtube.com/results" in current_url:
                 self._wait_for_search_results("youtube")
+            elif "github.com/search" in current_url or ("github.com" in current_url and "q=" in current_url):
+                self._wait_for_search_results("github")
             elif "google." in current_url and "/search" in current_url:
                 self._wait_for_search_results("google")
-        log_browser(f"Clicking result #{index}...")
-        target_str = f"result {index}"
-        self._perform_physical_click_and_verify(target_str, mouse_controller=mouse_controller)
+
+        effective_context = search_context or getattr(self, "last_search_query", None)
+        target_str = str(index).strip() if index is not None else "1"
+        if target_str.isdigit() or target_str.lower() in RESULT_ORDINAL_MAP:
+            parsed_idx = RESULT_ORDINAL_MAP.get(
+                target_str.lower(),
+                int(target_str) if target_str.isdigit() else 1,
+            )
+            if parsed_idx < 1:
+                parsed_idx = 1
+            log_browser(f"Clicking result #{parsed_idx}...")
+            target_str = f"result {parsed_idx}"
+        else:
+            log_browser(f"Clicking result: '{target_str}' with search context '{effective_context}'...")
+
+        pre_url = str(getattr(self.page, "url", "") or "").strip()
+        info = self._perform_physical_click_and_verify(
+            target_str,
+            mouse_controller=mouse_controller,
+            search_context=effective_context,
+        )
         self._unfocus_inputs()
+
+        # Semantic verification for named targets
+        is_named = not (target_str.isdigit() or target_str.lower() in RESULT_ORDINAL_MAP or target_str.lower().startswith("result "))
+        if is_named:
+            self.verify_destination(expected_target=target_str, expected_query=effective_context, pre_url=pre_url)
+
+        return info
+
+    def verify_destination(
+        self,
+        expected_target: str,
+        expected_query: str | None = None,
+        pre_url: str | None = None,
+    ):
+        """
+        Semantic verification: After clicking a named target, verify that the resulting
+        page actually matches the requested target and query.
+        Raises RuntimeError if verification fails.
+        """
+        if not self.is_active() or not self.page:
+            return
+
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < 3.0:
+            curr = (self.get_current_url() or "").strip()
+            if pre_url and curr and curr != pre_url and curr.lower() != "about:blank":
+                break
+            time.sleep(0.1)
+
+        curr_url = (self.get_current_url() or "").lower()
+        curr_title = (self.get_title() or "").lower()
+        target_lower = (expected_target or "").lower()
+        query_lower = (expected_query or "").lower()
+
+        query_tokens = [t for t in re.split(r"[^a-z0-9]+", query_lower) if len(t) >= 3]
+
+        is_repo = any(w in target_lower for w in ("repo", "repository", "github", "code"))
+        is_docs = any(w in target_lower for w in ("doc", "documentation", "guide", "manual", "api"))
+        is_site = any(w in target_lower for w in ("website", "site", "official", "page"))
+
+        log_browser(f"[VERIFY] Destination: url='{curr_url}' title='{curr_title}' for target='{expected_target}' query='{expected_query}'")
+
+        if is_repo:
+            valid_host = any(h in curr_url for h in ("github.com", "gitlab.com"))
+            if not valid_host:
+                raise RuntimeError(
+                    f"Semantic verification failed: Target '{expected_target}' requires a code repository, "
+                    f"but landed on '{curr_url}' ({curr_title})."
+                )
+            if query_tokens:
+                matched_token = any(tok in curr_url or tok in curr_title for tok in query_tokens)
+                if not matched_token:
+                    page_text = (self.get_visible_text() or "").lower()[:2000]
+                    matched_token = any(tok in page_text for tok in query_tokens)
+                if not matched_token:
+                    raise RuntimeError(
+                        f"Semantic verification failed: Landed on '{curr_url}' ({curr_title}), "
+                        f"which does not match repository query '{expected_query}'."
+                    )
+
+        elif is_docs:
+            valid_docs = any(d in curr_url or d in curr_title for d in ("doc", "guide", "manual", "api", "reference", "tutorial"))
+            if not valid_docs:
+                raise RuntimeError(
+                    f"Semantic verification failed: Target '{expected_target}' requires documentation, "
+                    f"but landed on '{curr_url}' ({curr_title})."
+                )
+            if query_tokens:
+                matched_token = any(tok in curr_url or tok in curr_title for tok in query_tokens)
+                if not matched_token:
+                    raise RuntimeError(
+                        f"Semantic verification failed: Landed on '{curr_url}' ({curr_title}), "
+                        f"which does not match docs query '{expected_query}'."
+                    )
+
+        elif is_site:
+            if query_tokens:
+                matched_token = any(tok in curr_url or tok in curr_title for tok in query_tokens)
+                if not matched_token:
+                    raise RuntimeError(
+                        f"Semantic verification failed: Landed on '{curr_url}' ({curr_title}), "
+                        f"which does not match query '{expected_query}'."
+                    )
+
+        log_browser(f"[VERIFY] Destination verified successfully: '{curr_url}'")
 
     def click_element(self, text: str, mouse_controller=None):
         log_browser(f"Clicking element: '{text}'")

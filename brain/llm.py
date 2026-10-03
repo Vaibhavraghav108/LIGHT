@@ -28,7 +28,7 @@ ALLOWED_LLM_ACTIONS = {action.name: action for action in Action}
 _SYSTEM_PROMPT = """You are LIGHT's structured action planner.
 Convert the user's spoken computer/browser request into JSON: {"actions": [{"action": "...", "target": "..."}]}.
 Allowed actions ONLY:
-OPEN_APP, CLOSE_APP, OPEN_URL, GO_BACK, GO_FORWARD, REFRESH, SEARCH, CLICK_RESULT, CLICK_ELEMENT, FIND_ELEMENT, READ_TITLE, READ_TEXT, COPY_TEXT, PASTE, TYPE, CLICK, SCROLL, PRESS_KEY, MOVE_MOUSE, WAIT, STOP.
+OPEN_APP, CLOSE_APP, OPEN_URL, GO_BACK, GO_FORWARD, REFRESH, SEARCH, CLICK_RESULT, CLICK_ELEMENT, FIND_ELEMENT, READ_TITLE, READ_TEXT, COPY_TEXT, PASTE, TYPE, CLICK, SCROLL, PRESS_KEY, MOVE_MOUSE, WAIT, STOP, HOTKEY, SWITCH_WINDOW, MINIMIZE_WINDOW, MAXIMIZE_WINDOW, RESTORE_WINDOW, SHOW_DESKTOP, MEDIA_PLAY_PAUSE, MEDIA_FORWARD, MEDIA_BACKWARD, MEDIA_FULLSCREEN, MEDIA_EXIT_FULLSCREEN, MEDIA_MUTE, MEDIA_VOLUME_UP, MEDIA_VOLUME_DOWN, MEDIA_NEXT, MEDIA_PREVIOUS, AGENT_TASK.
 
 Rules:
 - Include EVERY step requested by the user in order.
@@ -106,6 +106,10 @@ def validate_llm_action(
         if not target:
             raise ValueError("LLM OPEN_URL requires a target URL or website.")
         t_low = target.lower().strip()
+        if t_low.startswith("/") or "no_think" in t_low or "<think>" in t_low:
+            raise ValueError(f"Invalid control token in LLM OPEN_URL target: '{target}'")
+        if re.search(r"\bofficial\s+(?:repository|repo|website|site|page|docs|documentation|link|result)\b", t_low):
+            raise ValueError(f"Invalid OPEN_URL target for search result: '{target}'")
         if t_low in WEBSITES:
             return Command(Action.OPEN_URL, WEBSITES[t_low])
         for site_key, site_url in WEBSITES.items():
@@ -242,7 +246,14 @@ class QwenPlanner:
                 or parsed.get("response")
                 or "{}"
             )
-            return json.loads(content) if isinstance(content, str) else content
+            if isinstance(content, str):
+                cleaned_content = re.sub(r"/no_think", "", content, flags=re.IGNORECASE)
+                cleaned_content = re.sub(r"<think>[\s\S]*?</think>", "", cleaned_content, flags=re.IGNORECASE).strip()
+                json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned_content)
+                if json_match:
+                    cleaned_content = json_match.group(1).strip()
+                return json.loads(cleaned_content)
+            return content
 
     def plan_actions(self, text: str, state=None) -> list[Command] | None:
         """

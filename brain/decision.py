@@ -117,8 +117,67 @@ def _is_valid_url_target(candidate: str) -> bool:
 _ACTION_VERB_LOOKAHEAD = (
     r"(?:click|open|close|search|find|move|hover|point|scroll|go|navigate|"
     r"read|copy|select|paste|type|press|hit|wait|stop|cancel|exit|quit|"
-    r"shut\s*down|refresh|reload|back|forward)"
+    r"shut\s*down|refresh|reload|back|forward|"
+    r"switch|minimize|maximize|restore|show|pause|play|resume|skip|rewind|"
+    r"mute|unmute|louder|quieter|volume|next|previous|prev|"
+    r"ctrl|control|alt|win|windows)"
 )
+
+_AGENT_TASK_PATTERN = re.compile(
+    r"^(?:please\s+)?(?:"
+    r"(?:deep\s+)?research\b|"
+    r"investigate\b|"
+    r"browse\s+and\s+(?:find|compare|research|summarize|browse)\b|"
+    r"compare\b|"
+    r"summarize\b|"
+    r"(?:find|look\s*up)\s+.+?\s+and\s+(?:tell\s+me|show\s+me|give\s+me|summarize|compare)\b|"
+    r"look\s*up\s+.+?\s+(?:and\s+tell\s+me|on\s+the\s+web)\b|"
+    r"find\s+(?:the\s+)?official\s+.+?\s+(?:page|website|site|repo|repository|docs|documentation)\b|"
+    r"find\s+(?:the\s+)?(?:\d+|five|three|four|ten|top|best|several)\s+.+?\s+(?:and\s+(?:compare|summarize)|on\s+the\s+web)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_agent_task(text: str) -> bool:
+    if not text:
+        return False
+    return bool(_AGENT_TASK_PATTERN.search(text.strip()))
+
+
+def _parse_hotkey(text: str) -> str | None:
+    """
+    Parse spoken hotkey combinations like:
+    'press ctrl c', 'ctrl v', 'alt tab', 'win d', 'press ctrl shift esc', 'alt f4'.
+    Returns canonical hotkey string like 'ctrl+c', 'alt+tab', 'win+d', or None.
+    """
+    t = text.strip().lower()
+    t = re.sub(r"^(?:press|hit|hotkey)\s+", "", t).strip()
+    t_clean = re.sub(r"\s*(?:\+|and)\s*", " ", t)
+    tokens = t_clean.split()
+    if not (2 <= len(tokens) <= 4):
+        return None
+    modifiers = {"ctrl", "control", "alt", "win", "windows", "shift"}
+    if tokens[0] not in modifiers:
+        return None
+    normalized_tokens = []
+    for tok in tokens[:-1]:
+        if tok not in modifiers:
+            return None
+        norm = "ctrl" if tok == "control" else ("win" if tok == "windows" else tok)
+        normalized_tokens.append(norm)
+    last = tokens[-1]
+    if last in {"escape", "esc"}:
+        last = "esc"
+    valid_key_pattern = (
+        r"^[a-z0-9]$|^f\d{1,2}$|"
+        r"^(?:tab|esc|enter|space|backspace|delete|up|down|left|right|home|end|pageup|pagedown)$"
+    )
+    if not re.match(valid_key_pattern, last):
+        return None
+    normalized_tokens.append(last)
+    return "+".join(normalized_tokens)
+
 
 _CONVERSATIONAL_PREFIX_RE = re.compile(
     rf"^(?:(?:okay|ok|alright|all\s+right|please|now|well|so|"
@@ -227,6 +286,12 @@ def normalize_command_plan(
             elif t_low.startswith("google:"):
                 required_site = "google"
                 clean_query = t_str[7:].strip()
+            elif t_low.startswith("github:"):
+                required_site = "github"
+                clean_query = t_str[7:].strip()
+            elif "github" in raw_lower or active_site == "github":
+                required_site = "github"
+                clean_query = t_str
             elif "youtube" in raw_lower or active_site == "youtube":
                 required_site = "youtube"
                 clean_query = t_str
@@ -237,6 +302,8 @@ def normalize_command_plan(
             # Canonicalize target representation
             if required_site == "youtube":
                 canonical_target = f"youtube:{clean_query}"
+            elif required_site == "github":
+                canonical_target = f"github:{clean_query}"
             elif t_low.startswith("google:"):
                 canonical_target = f"google:{clean_query}"
             else:
@@ -251,7 +318,7 @@ def normalize_command_plan(
             needs_open_url = (active_site != required_site) and (
                 len(commands) > 1
                 or is_about_blank
-                or (is_closed and "youtube" in raw_lower and "and" in raw_lower)
+                or (is_closed and ("youtube" in raw_lower or "github" in raw_lower) and "and" in raw_lower)
             )
             if needs_open_url and required_site in WEBSITES:
                 normalized.append(Command(Action.OPEN_URL, WEBSITES[required_site]))
@@ -277,7 +344,7 @@ def parse_multi_command(text: str, state=None) -> list[Command] | None:
         return None
 
     raw = text.strip().rstrip(".!?").strip()
-    if raw.lower().startswith(("type ", "copy ", "select ")):
+    if raw.lower().startswith(("type ", "copy ", "select ")) or _is_agent_task(raw):
         return None
 
     clauses = [c.strip() for c in _MULTI_CLAUSE_SPLIT_RE.split(raw) if c and c.strip()]
@@ -291,12 +358,23 @@ def parse_multi_command(text: str, state=None) -> list[Command] | None:
     )
 
     commands: list[Command] = []
-    for clause in clauses:
+    trailing_incomplete: str | None = None
+    for i, clause in enumerate(clauses):
         try:
             cmd = parse_deterministic_command(clause, state=planning_state)
         except Exception:
+            if i == len(clauses) - 1 and len(commands) >= 1:
+                cleaned_clause = preprocess_text(clause).lower()
+                if cleaned_clause in {"open", "click", "click on", "select", "find", "search", "search for"}:
+                    trailing_incomplete = cleaned_clause
+                    break
             return None
         if cmd is None:
+            if i == len(clauses) - 1 and len(commands) >= 1:
+                cleaned_clause = preprocess_text(clause).lower()
+                if cleaned_clause in {"open", "click", "click on", "select", "find", "search", "search for"}:
+                    trailing_incomplete = cleaned_clause
+                    break
             return None
         commands.append(cmd)
         if planning_state is not None and hasattr(planning_state, "record_command"):
@@ -305,8 +383,13 @@ def parse_multi_command(text: str, state=None) -> list[Command] | None:
             except Exception:
                 pass
 
-    if len(commands) < 2:
+    if len(commands) < 1 or (len(commands) < 2 and trailing_incomplete is None):
         return None
+
+    if trailing_incomplete and state is not None:
+        state.pending_incomplete_action = trailing_incomplete
+        last_cmd = commands[-1]
+        state.pending_goal = last_cmd.target or last_cmd.action.value
 
     return normalize_command_plan(commands, state=state, raw_text=text)
 
@@ -374,12 +457,92 @@ def parse_deterministic_command(text: str, state=None) -> Command | None:
         "copy text",
         "copy from",
         "select from",
+        "switch",
+        "switch to",
     }:
         raise ValueError(f"Incomplete command: '{cleaned}'")
 
     # 1. Explicit STOP commands
     if text_lower in STOP_COMMANDS:
         return Command(Action.STOP, None)
+
+    # Hotkey combinations (e.g., 'press ctrl c', 'alt tab', 'win d')
+    hotkey = _parse_hotkey(cleaned)
+    if hotkey is not None:
+        return Command(Action.HOTKEY, hotkey)
+
+    # Window controls
+    if text_lower in {"show desktop", "go to desktop", "minimize all", "minimize all windows", "hide all windows"}:
+        return Command(Action.SHOW_DESKTOP, None)
+
+    if text_lower in {"minimize", "minimize window", "minimize this window", "minimize the window", "minimize current window", "minimize app"}:
+        return Command(Action.MINIMIZE_WINDOW, None)
+
+    if text_lower in {"maximize", "maximize window", "maximize this window", "maximize the window", "maximize current window", "maximize app"}:
+        return Command(Action.MAXIMIZE_WINDOW, None)
+
+    if text_lower in {"restore", "restore window", "restore this window", "restore the window", "restore current window", "unmaximize window", "un-maximize window"}:
+        return Command(Action.RESTORE_WINDOW, None)
+
+    switch_match = re.match(r"^switch\s+(?:window\s+)?to\s+(.+)$", cleaned, re.IGNORECASE)
+    if switch_match:
+        win_target = switch_match.group(1).strip()
+        return Command(Action.SWITCH_WINDOW, win_target)
+    if text_lower in {"switch window", "switch windows", "switch app", "switch application"}:
+        return Command(Action.SWITCH_WINDOW, None)
+
+    # Media controls
+    if text_lower in {
+        "pause", "pause video", "pause the video", "pause playback", "pause music", "pause media",
+        "play video", "play the video", "resume", "resume video", "resume the video", "resume playback"
+    }:
+        return Command(Action.MEDIA_PLAY_PAUSE, None)
+
+    if text_lower in {"fullscreen", "full screen", "go fullscreen", "go full screen", "enter fullscreen", "enter full screen", "make it fullscreen", "fullscreen video", "full screen video"}:
+        return Command(Action.MEDIA_FULLSCREEN, None)
+
+    if text_lower in {"exit fullscreen", "exit full screen", "leave fullscreen", "leave full screen", "unfullscreen", "close fullscreen"}:
+        return Command(Action.MEDIA_EXIT_FULLSCREEN, None)
+
+    if text_lower in {"mute", "mute video", "mute audio", "unmute", "unmute video", "unmute audio"}:
+        return Command(Action.MEDIA_MUTE, None)
+
+    if text_lower in {"volume up", "turn volume up", "increase volume", "louder", "turn it up", "raise volume"}:
+        return Command(Action.MEDIA_VOLUME_UP, None)
+
+    if text_lower in {"volume down", "turn volume down", "decrease volume", "quieter", "turn it down", "lower volume"}:
+        return Command(Action.MEDIA_VOLUME_DOWN, None)
+
+    if text_lower in {"next video", "next track", "next song", "skip video"}:
+        return Command(Action.MEDIA_NEXT, None)
+
+    if text_lower in {"previous video", "previous track", "previous song", "prev video", "prev track"}:
+        return Command(Action.MEDIA_PREVIOUS, None)
+
+    fwd_match = re.match(
+        r"^(?:skip|forward|fast\s+forward|jump\s+forward|seek\s+forward)(?:\s+(?:by\s+)?(\d+)(?:\s+seconds?|\s+secs?)?)?$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if fwd_match:
+        sec = fwd_match.group(1) or "10"
+        return Command(Action.MEDIA_FORWARD, sec)
+
+    if text_lower in {"rewind", "seek back", "skip back"}:
+        return Command(Action.MEDIA_BACKWARD, "10")
+
+    bwd_match = re.match(
+        r"^(?:rewind|backward|skip\s+back(?:ward)?|jump\s+back(?:ward)?|seek\s+back(?:ward)?|go\s+back)\s+(?:by\s+)?(\d+)(?:\s+seconds?|\s+secs?)?$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if bwd_match:
+        sec = bwd_match.group(1) or "10"
+        return Command(Action.MEDIA_BACKWARD, sec)
+
+    # Autonomous agent task (research & compare across web)
+    if _is_agent_task(cleaned):
+        return Command(Action.AGENT_TASK, cleaned)
 
     # 2. Direct keyboard commands
     if text_lower in KEY_COMMANDS:
@@ -437,24 +600,16 @@ def parse_deterministic_command(text: str, state=None) -> Command | None:
         if phrase:
             return Command(Action.COPY_TEXT, phrase)
 
-    # 5. Click Nth search result
+    # 5. Click Nth search result or named search target
     if re.match(
         r"^(?:click|open|select)\s+(?:on\s+)?(?:the\s+)?(?:most\s+relevant|top|best)\s+(?:search\s+)?(?:result|video|link)$",
         text_lower,
     ):
         return Command(Action.CLICK_RESULT, "1")
 
-    result_match = re.match(
-        r"^(?:click|open|select)\s+(?:on\s+)?(?:the\s+)?(?:result\s+)?(\w+)(?:\s+(?:search|relevant|top|best))?(?:\s+result|\s+video|\s+link)?$",
-        text_lower,
-    )
-    if result_match and ("result" in text_lower or "video" in text_lower):
-        ordinal = result_match.group(1)
-        if ordinal in RESULT_ORDINALS:
-            return Command(Action.CLICK_RESULT, RESULT_ORDINALS[ordinal])
-
+    # "click result one", "click result 1", "open result 1"
     result_num_match = re.match(
-        r"^(?:click|open|select)\s+(?:on\s+)?(?:the\s+)?(?:search\s+|relevant\s+)?(?:result|video)\s+(?:number\s+)?(\w+)$",
+        r"^(?:click|open|select)\s+(?:on\s+)?(?:the\s+)?(?:search\s+|relevant\s+)?(?:result|video|link)\s+(?:number\s+)?(\w+)$",
         text_lower,
     )
     if result_num_match:
@@ -462,7 +617,49 @@ def parse_deterministic_command(text: str, state=None) -> Command | None:
         if ordinal in RESULT_ORDINALS:
             return Command(Action.CLICK_RESULT, RESULT_ORDINALS[ordinal])
 
-    # 6. Search commands (Google, YouTube, or context-aware)
+    # "click the first result", "click first result"
+    result_match = re.match(
+        r"^(?:click|open|select)\s+(?:on\s+)?(?:the\s+)?(?:result\s+)?(\w+)(?:\s+(?:search|relevant|top|best))?(?:\s+result|\s+video|\s+link)$",
+        text_lower,
+    )
+    if result_match and ("result" in text_lower or "video" in text_lower or "link" in text_lower):
+        ordinal = result_match.group(1)
+        if ordinal in RESULT_ORDINALS:
+            return Command(Action.CLICK_RESULT, RESULT_ORDINALS[ordinal])
+
+    # "search LangGraph and open the official repository" or "official repository" -> CLICK_RESULT("official repository")
+    official_match = re.match(
+        r"^(?:(?:click|open|select)\s+(?:on\s+)?(?:the\s+)?)?official\s+(?:([\w\-]+)\s+)?(repository|repo|website|site|page|docs|documentation|link|result)$",
+        text_lower,
+    )
+    if official_match:
+        prefix = f"{official_match.group(1)} " if official_match.group(1) else ""
+        return Command(Action.CLICK_RESULT, f"official {prefix}{official_match.group(2)}".strip())
+
+    # "click the first element", "click first element", "click element 1", "click on first element"
+    elem_ordinal_match = re.match(
+        r"^(?:click|open|select)\s+(?:on\s+)?(?:the\s+)?(?:(?:(\w+)\s+(?:clickable\s+)?(?:element|item))|(?:(?:clickable\s+)?(?:element|item)\s+(\w+)))$",
+        text_lower,
+    )
+    if elem_ordinal_match:
+        ord_token = elem_ordinal_match.group(1) or elem_ordinal_match.group(2)
+        if ord_token in RESULT_ORDINALS:
+            idx = RESULT_ORDINALS[ord_token]
+            if state is not None and (
+                getattr(state, "last_search_query", None)
+                or (getattr(state, "current_site", None) in {"youtube", "google", "github"} and "search" in (getattr(state, "current_url", "") or "").lower())
+            ):
+                return Command(Action.CLICK_RESULT, idx)
+            return Command(Action.CLICK_ELEMENT, f"element {idx}")
+
+    # 6. Search commands (GitHub, YouTube, Google, or context-aware)
+    gh_search = re.match(r"^search\s+(?:on\s+)?github\s+(?:for\s+)?(.+)$", cleaned, re.IGNORECASE)
+    if gh_search:
+        query = gh_search.group(1).strip()
+        if not query:
+            raise ValueError("No search query specified.")
+        return Command(Action.SEARCH, f"github:{query}")
+
     yt_search = re.match(r"^search\s+(?:on\s+)?youtube\s+(?:for\s+)?(.+)$", cleaned, re.IGNORECASE)
     if yt_search:
         query = yt_search.group(1).strip()
@@ -484,6 +681,8 @@ def parse_deterministic_command(text: str, state=None) -> Command | None:
             raise ValueError("No search query specified.")
         if state is not None and getattr(state, "current_site", None) == "youtube":
             return Command(Action.SEARCH, f"youtube:{query}")
+        if state is not None and getattr(state, "current_site", None) == "github":
+            return Command(Action.SEARCH, f"github:{query}")
         return Command(Action.SEARCH, query)
 
     # 7. Find element on page (only for direct element targets, not complex 'find ... on YouTube and ...' requests)
@@ -511,7 +710,34 @@ def parse_deterministic_command(text: str, state=None) -> Command | None:
         target = click_elem_match.group(1).strip()
         if target.lower().startswith("the "):
             target = target[4:].strip()
-        if target.lower() not in {"mouse", "here"}:
+        t_low = target.lower()
+
+        # Guard: ordinal element targets must resolve to index, never literal text search
+        ord_elem_m = re.match(
+            r"^(?:the\s+)?(?:(?:(\w+)\s+(?:clickable\s+)?(?:element|item))|(?:(?:clickable\s+)?(?:element|item)\s+(\w+)))$",
+            t_low,
+        )
+        if ord_elem_m:
+            tok = ord_elem_m.group(1) or ord_elem_m.group(2)
+            if tok in RESULT_ORDINALS:
+                idx = RESULT_ORDINALS[tok]
+                if state is not None and (
+                    getattr(state, "last_search_query", None)
+                    or (getattr(state, "current_site", None) in {"youtube", "google"} and "search" in (getattr(state, "current_url", "") or "").lower())
+                ):
+                    return Command(Action.CLICK_RESULT, idx)
+                return Command(Action.CLICK_ELEMENT, f"element {idx}")
+
+        if t_low in RESULT_ORDINALS:
+            idx = RESULT_ORDINALS[t_low]
+            if state is not None and (
+                getattr(state, "last_search_query", None)
+                or (getattr(state, "current_site", None) in {"youtube", "google"} and "search" in (getattr(state, "current_url", "") or "").lower())
+            ):
+                return Command(Action.CLICK_RESULT, idx)
+            return Command(Action.CLICK_ELEMENT, f"element {idx}")
+
+        if t_low not in {"mouse", "here"}:
             return Command(Action.CLICK_ELEMENT, target)
 
     # 9. Common websites, arbitrary URLs, & known applications
@@ -595,6 +821,8 @@ def extract_target(text: str, action: Action) -> str | None:
         return cleaned[6:].strip()
 
     if action == Action.OPEN_URL:
+        if re.search(r"\bofficial\s+(?:repository|repo|website|site|page|docs|documentation|link|result)\b", text_lower):
+            return None
         for prefix in ("open ", "go to ", "navigate to "):
             if text_lower.startswith(prefix):
                 return cleaned[len(prefix):].strip()
@@ -633,6 +861,40 @@ def extract_target(text: str, action: Action) -> str | None:
     if action == Action.WAIT:
         digits = re.findall(r"\d+", text_lower)
         return digits[0] if digits else "2"
+
+    if action == Action.HOTKEY:
+        return _parse_hotkey(cleaned)
+
+    if action == Action.SWITCH_WINDOW:
+        switch_match = re.match(r"^switch\s+(?:window\s+)?to\s+(.+)$", cleaned, re.IGNORECASE)
+        return switch_match.group(1).strip() if switch_match else None
+
+    if action in {
+        Action.MINIMIZE_WINDOW,
+        Action.MAXIMIZE_WINDOW,
+        Action.RESTORE_WINDOW,
+        Action.SHOW_DESKTOP,
+        Action.MEDIA_PLAY_PAUSE,
+        Action.MEDIA_FULLSCREEN,
+        Action.MEDIA_EXIT_FULLSCREEN,
+        Action.MEDIA_MUTE,
+        Action.MEDIA_VOLUME_UP,
+        Action.MEDIA_VOLUME_DOWN,
+        Action.MEDIA_NEXT,
+        Action.MEDIA_PREVIOUS,
+    }:
+        return None
+
+    if action == Action.MEDIA_FORWARD:
+        fwd_match = re.search(r"\b(\d+)\b", cleaned)
+        return fwd_match.group(1) if fwd_match else "10"
+
+    if action == Action.MEDIA_BACKWARD:
+        bwd_match = re.search(r"\b(\d+)\b", cleaned)
+        return bwd_match.group(1) if bwd_match else "10"
+
+    if action == Action.AGENT_TASK:
+        return cleaned
 
     return None
 
@@ -673,6 +935,10 @@ def validate_command(text: str, command: Command) -> Command:
             raise ValueError(
                 "Laya predicted OPEN_URL, but the command does not look like a URL command."
             )
+        if re.search(r"\bofficial\s+(?:[\w\-]+\s+)?(?:repository|repo|website|site|page|docs|documentation|link|result)\b", text_lower):
+            raise ValueError(
+                f"Laya predicted OPEN_URL for search result phrase: '{text}'. Redirect to CLICK_RESULT."
+            )
         if not target or not (_is_valid_url_target(target) or target.lower() in WEBSITES):
             raise ValueError(f"Invalid or missing URL target: '{target}'")
 
@@ -691,6 +957,14 @@ def validate_command(text: str, command: Command) -> Command:
             )
         if not target:
             raise ValueError("No key specified.")
+
+    elif action == Action.HOTKEY:
+        if not target:
+            raise ValueError("No hotkey combination specified.")
+
+    elif action == Action.AGENT_TASK:
+        if not target:
+            raise ValueError("No agent task specified.")
 
     elif action == Action.CLICK:
         if "click" not in text_lower:

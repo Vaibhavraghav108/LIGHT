@@ -224,6 +224,96 @@ class LightLoop:
                     break
         return results
 
+    async def _call_executor_async(self, command: Command, raw_text: str | None = None) -> str:
+        """Call executor.execute_async() when available, respecting cancel_event."""
+        if hasattr(self.executor, "execute_async"):
+            supports_cancel_event = False
+            try:
+                sig = inspect.signature(self.executor.execute_async)
+                if "cancel_event" in sig.parameters:
+                    supports_cancel_event = True
+            except (ValueError, TypeError):
+                supports_cancel_event = False
+
+            if supports_cancel_event:
+                return await self.executor.execute_async(
+                    command,
+                    raw_text=raw_text,
+                    cancel_event=self.command_queue.cancel_event,
+                )
+            return await self.executor.execute_async(command, raw_text=raw_text)
+
+        return self._call_executor(command, raw_text=raw_text)
+
+    async def execute_next_queued_async(self, timeout: float = 0.02) -> str | None:
+        """
+        Asynchronous consumer step: dequeue and execute next CommandRequest using execute_async.
+        Compatible with LIGHT's active event loop and preserves STOP cancellation.
+        """
+        req = self.command_queue.dequeue(timeout=timeout)
+        if req is None:
+            return None
+
+        try:
+            if req.status == CommandStatus.CANCELLED:
+                return "CANCELLED"
+
+            execution_result = await self._call_executor_async(req.command, raw_text=req.text)
+            req.execution_completed_at = time.perf_counter()
+            req.verification_ms = float(getattr(self.executor, "last_verification_ms", 0.0) or 0.0)
+            req.status = CommandStatus.COMPLETED
+            log_executor(str(execution_result))
+            log_perf(req.format_perf_line())
+            return execution_result
+        except Exception as error:
+            req.execution_completed_at = time.perf_counter()
+            req.status = CommandStatus.FAILED
+            req.error = str(error)
+            self.state.last_action = req.command.action
+            self.state.record_failure(req.text, status="ERROR", error_message=str(error))
+            skipped = self.command_queue.cancel_dependent_after_failure(
+                req.command.action,
+                failed_text=req.text,
+            )
+            log_error(
+                f"{req.command.action.name} failed ({req.command.target}): {error} — Could not execute command: {error}"
+            )
+            if skipped:
+                log_info(
+                    f"Skipped {skipped} dependent queued command(s) after {req.command.action.name} failure."
+                )
+            log_info("Continuing to listen...")
+            return "ERROR"
+        finally:
+            self.command_queue.mark_execution_finished()
+
+    async def drain_queue_async(self) -> list[str]:
+        """Execute all currently queued commands asynchronously and sequentially."""
+        results: list[str] = []
+        while self.command_queue.pending_count() > 0:
+            res = await self.execute_next_queued_async(timeout=0.0)
+            if res is not None:
+                results.append(res)
+                if res == "STOP":
+                    break
+        return results
+
+    async def process_text_async(self, text: str) -> str:
+        """
+        Asynchronous spoken transcription processing entry point.
+        Enqueues requests and drains the queue using native async executor calls.
+        """
+        requests = self.ingest_text(text)
+        if not requests:
+            return "IGNORED"
+
+        statuses = await self.drain_queue_async()
+        if "STOP" in statuses:
+            return "STOP"
+        if "ERROR" in statuses and "OK" not in statuses:
+            return "ERROR"
+        return statuses[-1] if statuses else "OK"
+
     def process_text(self, text: str) -> str:
         """
         Process a spoken transcription string (backward-compatible synchronous API

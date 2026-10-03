@@ -43,7 +43,7 @@ class AppController:
             "Google Chrome was not found on this computer. Set CHROME_EXECUTABLE_PATH in .env if installed in a custom location."
         )
 
-    def open(self, app_name: str):
+    def open(self, app_name: str, wait_and_focus: bool = True, screen_controller=None):
         if not app_name or not app_name.strip():
             raise ValueError("No application specified.")
 
@@ -61,6 +61,14 @@ class AppController:
             raise ValueError(f"Unknown application: {app_name}")
 
         self._launched_processes.setdefault(key, []).append(proc)
+
+        if wait_and_focus and key in ("notepad", "calculator"):
+            if screen_controller is not None:
+                screen_controller.wait_for_window_and_focus(key, timeout=3.0)
+            else:
+                from computer.screen import ScreenController
+                ScreenController().wait_for_window_and_focus(key, timeout=3.0)
+
         return proc
 
     def open_browser_window(self, app_name: str):

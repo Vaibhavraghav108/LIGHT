@@ -1,13 +1,16 @@
+import re
 import time
 
 from brain.commands import Action, Command
+from brain.decision import RESULT_ORDINALS
 from browser.browser import BrowserController
+from browser.agent import AutonomousBrowserAgent
 from computer.apps import AppController
 from computer.keyboard import KeyboardController
 from computer.mouse import MouseController
 from computer.screen import ScreenController
 from config import DEFAULT_WAIT_SECONDS
-from core.state import LightState
+from core.state import LightState, BrowserOwnership
 from utils.logger import log_executor
 
 
@@ -18,6 +21,7 @@ class Executor:
         self.keyboard = KeyboardController()
         self.mouse = MouseController()
         self.browser = BrowserController()
+        self.browser_agent = AutonomousBrowserAgent()
         self.screen = ScreenController()
         self.state = state if state is not None else LightState()
         self.last_verification_ms: float = 0.0
@@ -86,12 +90,18 @@ class Executor:
                 "google chrome",
             }:
                 self.browser.start()
+                self.screen.wait_for_window_and_focus("chrome", timeout=2.0)
                 self.state.current_browser = "chrome"
                 self.state.current_app = "chrome"
                 self.state.browser_open = True
                 log_executor("Started Playwright Chromium/Chrome browser session.")
             else:
-                self.apps.open(target)
+                self.apps.open(target, wait_and_focus=True, screen_controller=self.screen)
+                canonical = self.apps._canonical_app_key(target)
+                self.state.current_app = canonical
+                fg = self.screen.get_foreground_window_info()
+                self.state.active_window = fg.get("title") or canonical
+                log_executor(f"Opened {canonical} and verified in foreground.")
 
         elif action == Action.CLOSE_APP:
             if target and any(b in target.lower() for b in ("brave", "chrome")):
@@ -102,17 +112,51 @@ class Executor:
                 self.apps.close(target)
 
         # ==========================================
-        # KEYBOARD
+        # KEYBOARD & HOTKEYS
         # ==========================================
 
         elif action == Action.TYPE:
-            if self.browser.is_active() and self.browser.type_in_browser(target):
-                pass
+            is_browser_fg = self.screen.is_browser_foreground(self.browser)
+            if is_browser_fg and self.browser.is_active():
+                if not self.browser.type_in_browser(target):
+                    self.keyboard.type_text(target)
             else:
                 self.keyboard.type_text(target)
 
         elif action == Action.PRESS_KEY:
             self.keyboard.press(target)
+
+        elif action == Action.HOTKEY:
+            if not target:
+                raise ValueError("No keys specified for hotkey.")
+            keys = [k.strip() for k in target.replace("+", " ").replace(",", " ").split() if k.strip()]
+            self.keyboard.hotkey(*keys)
+
+        # ==========================================
+        # WINDOW CONTROL
+        # ==========================================
+
+        elif action == Action.SWITCH_WINDOW:
+            if not target:
+                raise ValueError("No target window specified.")
+            success = self.screen.switch_to_window(target)
+            if not success:
+                raise RuntimeError(f"Window matching '{target}' was not found.")
+            self.state.current_app = target.lower().strip()
+            fg = self.screen.get_foreground_window_info()
+            self.state.active_window = fg.get("title") or target
+
+        elif action == Action.MINIMIZE_WINDOW:
+            self.screen.minimize_foreground_window()
+
+        elif action == Action.MAXIMIZE_WINDOW:
+            self.screen.maximize_foreground_window()
+
+        elif action == Action.RESTORE_WINDOW:
+            self.screen.restore_foreground_window()
+
+        elif action == Action.SHOW_DESKTOP:
+            self.screen.show_desktop()
 
         # ==========================================
         # MOUSE & SCROLL
@@ -162,8 +206,13 @@ class Executor:
             elif target.lower().startswith("google:"):
                 query = target[7:].strip()
                 self.browser.search(query, engine="google")
+            elif target.lower().startswith("github:"):
+                query = target[7:].strip()
+                self.browser.search(query, engine="github")
             elif self.state.current_site == "youtube":
                 self.browser.search(target, engine="youtube")
+            elif self.state.current_site == "github":
+                self.browser.search(target, engine="github")
             else:
                 self.browser.search(target)
 
@@ -175,20 +224,53 @@ class Executor:
                 raise RuntimeError(
                     f"Cannot execute CLICK_RESULT because prerequisite {self.state.last_action.name} failed."
                 )
-            index = int(target) if target and str(target).isdigit() else 1
-            try:
-                self.browser.click_result(index, mouse_controller=self.mouse)
-            except TypeError:
-                self.browser.click_result(index)
+            search_context = self.state.last_search_query
+            target_str = str(target).strip() if target is not None else "1"
+            if target_str.isdigit() or target_str.lower() in RESULT_ORDINALS:
+                index = int(target_str) if target_str.isdigit() else RESULT_ORDINALS.get(target_str.lower(), 1)
+                try:
+                    self.browser.click_result(index, mouse_controller=self.mouse)
+                except TypeError:
+                    self.browser.click_result(index)
+            else:
+                try:
+                    self.browser.click_result(target, mouse_controller=self.mouse, search_context=search_context)
+                except TypeError:
+                    self.browser.click_result(target, mouse_controller=self.mouse)
 
         elif action == Action.CLICK_ELEMENT:
+            t_low = (target or "").strip().lower()
+            ord_elem_m = re.match(
+                r"^(?:the\s+)?(?:(?:(\w+)\s+(?:clickable\s+)?(?:element|item))|(?:(?:clickable\s+)?(?:element|item)\s+(\w+)))$",
+                t_low,
+            )
+            if ord_elem_m:
+                tok = ord_elem_m.group(1) or ord_elem_m.group(2)
+                if tok in RESULT_ORDINALS:
+                    idx = RESULT_ORDINALS[tok]
+                    if self.state is not None and (
+                        getattr(self.state, "last_search_query", None)
+                        or (getattr(self.state, "current_site", None) in {"youtube", "google", "github"} and "search" in (getattr(self.state, "current_url", "") or "").lower())
+                    ):
+                        return self.execute(Command(Action.CLICK_RESULT, idx), raw_text=raw_text, cancel_event=cancel_event)
+                    target = f"element {idx}"
+            elif t_low in RESULT_ORDINALS:
+                idx = RESULT_ORDINALS[t_low]
+                if self.state is not None and (
+                    getattr(self.state, "last_search_query", None)
+                    or (getattr(self.state, "current_site", None) in {"youtube", "google", "github"} and "search" in (getattr(self.state, "current_url", "") or "").lower())
+                ):
+                    return self.execute(Command(Action.CLICK_RESULT, idx), raw_text=raw_text, cancel_event=cancel_event)
+                target = f"element {idx}"
             try:
                 self.browser.click_element(target, mouse_controller=self.mouse)
             except TypeError:
                 self.browser.click_element(target)
 
         elif action == Action.FIND_ELEMENT:
-            self.browser.find_element(target)
+            found = self.browser.find_element(target)
+            if not found:
+                raise RuntimeError(f"Element not found on page: '{target}'")
 
         elif action == Action.READ_TITLE:
             if self.browser.is_active():
@@ -212,6 +294,110 @@ class Executor:
             pyautogui.hotkey("ctrl", "v")
 
         # ==========================================
+        # MEDIA CONTROLS
+        # ==========================================
+
+        elif action == Action.MEDIA_PLAY_PAUSE:
+            if self.screen.is_browser_foreground(self.browser) or self.browser.has_video_element():
+                self.browser.media_play_pause()
+            else:
+                import pyautogui
+                pyautogui.press("playpause")
+
+        elif action == Action.MEDIA_FORWARD:
+            seconds = 10.0
+            if target:
+                try:
+                    seconds = float(target)
+                except ValueError:
+                    seconds = 10.0
+            if self.screen.is_browser_foreground(self.browser) or self.browser.has_video_element():
+                self.browser.media_seek(seconds)
+            else:
+                import pyautogui
+                pyautogui.press("right")
+
+        elif action == Action.MEDIA_BACKWARD:
+            seconds = 10.0
+            if target:
+                try:
+                    seconds = float(target)
+                except ValueError:
+                    seconds = 10.0
+            if self.screen.is_browser_foreground(self.browser) or self.browser.has_video_element():
+                self.browser.media_seek(-seconds)
+            else:
+                import pyautogui
+                pyautogui.press("left")
+
+        elif action == Action.MEDIA_FULLSCREEN:
+            if self.screen.is_browser_foreground(self.browser) or self.browser.has_video_element():
+                self.browser.media_fullscreen(True)
+            else:
+                import pyautogui
+                pyautogui.press("f")
+
+        elif action == Action.MEDIA_EXIT_FULLSCREEN:
+            if self.screen.is_browser_foreground(self.browser) or self.browser.has_video_element():
+                self.browser.media_fullscreen(False)
+            else:
+                import pyautogui
+                pyautogui.press("escape")
+
+        elif action == Action.MEDIA_MUTE:
+            if self.screen.is_browser_foreground(self.browser) or self.browser.has_video_element():
+                self.browser.media_mute()
+            else:
+                import pyautogui
+                pyautogui.press("volumemute")
+
+        elif action == Action.MEDIA_VOLUME_UP:
+            import pyautogui
+            pyautogui.press("volumeup", presses=2)
+
+        elif action == Action.MEDIA_VOLUME_DOWN:
+            import pyautogui
+            pyautogui.press("volumedown", presses=2)
+
+        elif action == Action.MEDIA_NEXT:
+            if self.screen.is_browser_foreground(self.browser) or self.browser.has_video_element():
+                self.browser.media_next()
+            else:
+                import pyautogui
+                pyautogui.press("nexttrack")
+
+        elif action == Action.MEDIA_PREVIOUS:
+            if self.screen.is_browser_foreground(self.browser) or self.browser.has_video_element():
+                self.browser.media_previous()
+            else:
+                import pyautogui
+                pyautogui.press("prevtrack")
+
+        # ==========================================
+        # AUTONOMOUS AGENT TASK
+        # ==========================================
+
+        elif action == Action.AGENT_TASK:
+            self.state.agent_running = True
+            self.state.set_browser_ownership(BrowserOwnership.AGENT)
+            try:
+                res = self.browser_agent.run_task(task_instruction=target, cancel_event=cancel_event)
+                final_res = res.get("final_result", "")
+                if res.get("cancelled", False):
+                    log_executor(f"Agent task cancelled: {final_res}")
+                    return "CANCELLED"
+                if not res.get("success", False):
+                    log_executor(f"Agent task failed: {final_res}")
+                    raise RuntimeError(final_res or "Agent task failed to complete goal.")
+                log_executor(f"Agent task completed: {final_res}")
+            finally:
+                self.state.agent_running = False
+                if self.browser.is_active():
+                    self.state.set_browser_ownership(BrowserOwnership.LIGHT)
+                else:
+                    self.state.set_browser_ownership(BrowserOwnership.NONE)
+
+        # ==========================================
         # WAIT
         # ==========================================
 
@@ -225,6 +411,14 @@ class Executor:
         # ==========================================
 
         elif action == Action.STOP:
+            if hasattr(self, "browser_agent") and self.browser_agent:
+                try:
+                    if hasattr(self.browser_agent, "cancel"):
+                        self.browser_agent.cancel()
+                except Exception:
+                    pass
+            self.state.agent_running = False
+            self.state.set_browser_ownership(BrowserOwnership.NONE)
             self.browser.close()
             return "STOP"
 
@@ -239,4 +433,41 @@ class Executor:
         self.state.sync_observation(browser=self.browser, screen=self.screen)
 
         return "OK"
+
+    async def execute_async(
+        self,
+        command: Command,
+        raw_text: str | None = None,
+        cancel_event=None,
+    ) -> str:
+        """
+        Asynchronous executor entry point compatible with an active asyncio event loop.
+        Allows AGENT_TASK to await AutonomousBrowserAgent.execute_task directly.
+        """
+        if command.action == Action.AGENT_TASK:
+            self.state.agent_running = True
+            self.state.set_browser_ownership(BrowserOwnership.AGENT)
+            try:
+                raw_res = await self.browser_agent.execute_task(
+                    task_prompt=command.target,
+                    cancel_event=cancel_event,
+                )
+                cancelled = (cancel_event is not None and cancel_event.is_set()) or raw_res == "CANCELLED"
+                if cancelled:
+                    log_executor(f"Agent task cancelled: {raw_res}")
+                    return "CANCELLED"
+                if not raw_res.startswith("AGENT_COMPLETED"):
+                    log_executor(f"Agent task failed: {raw_res}")
+                    raise RuntimeError(raw_res or "Agent task failed to complete goal.")
+                log_executor(f"Agent task completed: {raw_res}")
+                self.state.record_command(raw_text or "", command)
+                return "OK"
+            finally:
+                self.state.agent_running = False
+                if self.browser.is_active():
+                    self.state.set_browser_ownership(BrowserOwnership.LIGHT)
+                else:
+                    self.state.set_browser_ownership(BrowserOwnership.NONE)
+
+        return self.execute(command, raw_text=raw_text, cancel_event=cancel_event)
 
