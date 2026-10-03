@@ -12,14 +12,14 @@ LIGHT employs a multi-tiered test suite to guarantee safety, deterministic accur
 ┌────────────────────────────────────────────────────────────────────────┐
 │                   LIGHT MULTI-TIER TEST SUITE (119 TESTS)              │
 ├────────────────────────────────┬───────────────────────────────────────┤
-│ Tier 1: Deterministic Unit     │ 66 Tests across voice, intent parsing,│
+│ Tier 1: Deterministic Unit     │ 42 Tests across voice, intent parsing,│
 │ (Isolated Mocks, <1ms parsing) │ desktop apps, screen, and browser.    │
 ├────────────────────────────────┼───────────────────────────────────────┤
 │ Tier 2: Real Local Browser     │ 5 Headless Playwright integration     │
 │ (ThreadingHTTPServer + DOM)    │ tests against local HTML fixtures.    │
 ├────────────────────────────────┼───────────────────────────────────────┤
-│ Tier 3: Workflow Reliability & │ 44 Tests covering queue, Qwen planner,│
-│ Advanced Features & Ownership  │ Browser Use, ranking, and verification│
+│ Tier 3: Queue, LLM Planning,   │ 68 Tests covering queue, Qwen planner,│
+│ Reliability & Advanced Features│ Browser Use, ranking, and verification│
 ├────────────────────────────────┼───────────────────────────────────────┤
 │ Tier 4: Opt-In Windows Smoke   │ 4 Host environment checks skipped     │
 │ (LIGHT_RUN_WINDOWS_SMOKE=1)    │ by default during automated runs.     │
@@ -54,12 +54,12 @@ Verifies that all Python modules compile cleanly without syntax errors:
 
 | Subsystem | Target Test File | Test Command | Tests |
 | :--- | :--- | :--- | :---: |
-| **Voice & Handy Loop** | `tests/test_voice.py` | `python -m unittest tests/test_voice.py -v` | 5 |
-| **Laya & Intent Parsing** | `tests/test_laya.py` | `python -m unittest tests/test_laya.py -v` | 14 |
-| **Desktop & Computer** | `tests/test_computer.py` | `python -m unittest tests/test_computer.py -v` | 9 |
-| **Browser Unit** | `tests/test_browser.py` | `python -m unittest tests/test_browser.py -v` | 7 |
+| **Voice & Handy Loop** | `tests/test_voice.py` | `python -m unittest tests/test_voice.py -v` | 6 |
+| **Laya & Intent Parsing** | `tests/test_laya.py` | `python -m unittest tests/test_laya.py -v` | 16 |
+| **Desktop & Computer** | `tests/test_computer.py` | `python -m unittest tests/test_computer.py -v` | 12 |
+| **Browser Unit** | `tests/test_browser.py` | `python -m unittest tests/test_browser.py -v` | 8 |
 | **Local Browser Integration**| `tests/test_integration_local_browser.py` | `python -m unittest tests/test_integration_local_browser.py -v`| 5 |
-| **V2 Queue & LLM Planning** | `tests/test_queue_and_llm.py` | `python -m unittest tests/test_queue_and_llm.py -v` | 31 |
+| **V2 Queue & LLM Planning** | `tests/test_queue_and_llm.py` | `python -m unittest tests/test_queue_and_llm.py -v` | 24 |
 | **Reliability & Ownership** | `tests/test_new_features.py` | `python -m unittest tests/test_new_features.py -v` | 44 |
 | **Opt-In Windows Smoke** | `tests/test_windows_smoke.py` | `$env:LIGHT_RUN_WINDOWS_SMOKE="1"; python -m unittest tests/test_windows_smoke.py -v` | 4 |
 
@@ -67,30 +67,35 @@ Verifies that all Python modules compile cleanly without syntax errors:
 
 ## 3. Detailed Test Suite Inventory
 
-### Tier 1: Deterministic Unit Tests (66 Tests)
-- **`tests/test_voice.py` (5 tests)**:
+### Tier 1: Deterministic Unit Tests (42 Tests)
+- **`tests/test_voice.py` (6 tests)**:
   - Missing Handy database handling (`FileNotFoundError`).
   - Empty `transcription_history` handling (`None` return).
   - Latest transcription retrieval with monotonic ID ordering.
   - Malformed database schema recovery (`RuntimeError`).
   - Voice loop debouncing and SQLite locked-database error recovery.
-- **`tests/test_laya.py` (14 tests)**:
+  - Single-instance process cleanup (`ensure_single_instance`).
+- **`tests/test_laya.py` (16 tests)**:
   - Deterministic command mapping across all `Action` enum variants.
   - Context-aware search destination routing (YouTube vs Google).
-  - Inclusive text range copy parsing with custom delimiters (`|||`).
+  - Direct copy commands (`"copy text <phrase>"`) and delimiter boundary slicing (`|||`).
+  - Mouse movement variants and ambiguous phrase protection.
   - Rejection of malformed/incomplete commands (`"Open"`, `"Search"`, `"Copy from"`).
   - Safety rejection of casual speech (`"How are you"`, `"I am hungry"`) and single unrelated words (`"Cricket"`).
-- **`tests/test_computer.py` (9 tests)**:
+- **`tests/test_computer.py` (12 tests)**:
   - App launch/close for `Notepad` and `Calculator`.
   - Protected browser termination ensuring only LIGHT-tracked PIDs are terminated.
+  - Controlled browser session management and state updates.
   - Mouse relative movements, boundary clamping, and anchor point homing.
-  - Keyboard focus typing and system hotkey dispatch.
-- **`tests/test_browser.py` (7 tests)**:
+  - Keyboard focus typing, key presses, and system hotkey dispatch.
+  - Unknown application error handling.
+- **`tests/test_browser.py` (8 tests)**:
   - URL normalization and standard website shortcut expansion.
   - Navigation controls (`go_back`, `go_forward`, `refresh`, `scroll`).
   - High-DPI viewport-to-screen coordinate math.
   - Browser start fallback chain from inaccessible Brave to Playwright Chromium.
   - Google reCAPTCHA `/sorry/` detection and automatic DuckDuckGo fallback.
+  - End-to-end mocked context loop execution.
 
 ### Tier 2: Real Local-Browser Playwright Integration Tests (5 Tests)
 - **`tests/test_integration_local_browser.py` (5 tests)**:
@@ -102,14 +107,16 @@ Verifies that all Python modules compile cleanly without syntax errors:
   - **Test 4**: Result selection by index and window scroll tracking.
   - **Test 5**: Inclusive text range copying, casing preservation, and DOM highlight cleanup (`clear_highlights`).
 
-### Tier 3: Queue, LLM Planning & Feature Reliability (75 Tests)
-- **`tests/test_queue_and_llm.py` (31 tests)**:
+### Tier 3: Queue, LLM Planning & Feature Reliability (68 Tests)
+- **`tests/test_queue_and_llm.py` (24 tests)**:
   - Producer-consumer command queue prioritizing `CommandPriority.STOP`.
   - Immediate STOP preemption interrupting active `WAIT` actions.
   - Background voice ingestion decoupled from synchronous command execution.
-  - Pruning downstream dependent commands on prerequisite failure.
+  - Rapid stress sequences preserving exact queue order and zero dropped transcriptions.
+  - Fast-path verification confirming zero LLM calls for 22 deterministic commands.
   - Local Qwen3 1.7B planning, prompt construction, and plan normalization.
-  - Non-blocking execution of compound multi-clause sentences.
+  - Google reCAPTCHA fallback, closed-context browser recovery, and skip button verification.
+  - Pruning downstream dependent commands on prerequisite failure.
 - **`tests/test_new_features.py` (44 tests)**:
   - Foreground-aware typing and active window verification (`computer/screen.py`).
   - Windows window controls (minimize, maximize, restore, switch) and media keys.
