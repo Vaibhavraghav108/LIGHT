@@ -1,4 +1,5 @@
 import re
+import threading
 import time
 
 from brain.commands import Action, Command
@@ -13,7 +14,6 @@ from config import DEFAULT_WAIT_SECONDS
 from core.state import LightState, BrowserOwnership
 from utils.logger import log_executor
 
-
 class Executor:
 
     def __init__(self, state: LightState | None = None):
@@ -26,6 +26,10 @@ class Executor:
         self.state = state if state is not None else LightState()
         self.last_verification_ms: float = 0.0
         self.last_stop_interrupt_ms: float = 0.0
+        self._agent_thread: threading.Thread | None = None
+        self._agent_lock = threading.Lock()
+        self.last_agent_result: str | None = None
+        self.last_agent_error: str | None = None
 
     def _sleep_interruptible(self, seconds: float, cancel_event=None):
         """
@@ -378,24 +382,72 @@ class Executor:
         # ==========================================
 
         elif action == Action.AGENT_TASK:
-            self.state.agent_running = True
-            self.state.set_browser_ownership(BrowserOwnership.AGENT)
-            try:
-                res = self.browser_agent.run_task(task_instruction=target, cancel_event=cancel_event)
-                final_res = res.get("final_result", "")
-                if res.get("cancelled", False):
-                    log_executor(f"Agent task cancelled: {final_res}")
-                    return "CANCELLED"
-                if not res.get("success", False):
-                    log_executor(f"Agent task failed: {final_res}")
-                    raise RuntimeError(final_res or "Agent task failed to complete goal.")
-                log_executor(f"Agent task completed: {final_res}")
-            finally:
-                self.state.agent_running = False
-                if self.browser.is_active():
-                    self.state.set_browser_ownership(BrowserOwnership.LIGHT)
-                else:
-                    self.state.set_browser_ownership(BrowserOwnership.NONE)
+            if cancel_event is not None and cancel_event.is_set():
+                with self.state._lock:
+                    self.state.agent_running = False
+                log_executor("Agent task cancelled before start: CANCELLED")
+                return "CANCELLED"
+
+            with self._agent_lock:
+                if self.state.agent_running or (self._agent_thread is not None and self._agent_thread.is_alive()):
+                    log_executor(
+                        f"[AGENT_TASK] Duplicate agent task rejected: an autonomous agent task is already active. Ignoring '{target}'."
+                    )
+                    return "REJECTED"
+
+            with self.state._lock:
+                self.state.agent_running = True
+                self.state.set_browser_ownership(BrowserOwnership.AGENT)
+
+            def _agent_worker():
+                try:
+                    log_executor(f"[AGENT_TASK] Background worker started for: '{target}'")
+                    res = self.browser_agent.run_task(task_instruction=target, cancel_event=cancel_event)
+                    final_res = res.get("final_result", "") if isinstance(res, dict) else str(res)
+                    is_cancelled = res.get("cancelled", False) if isinstance(res, dict) else (final_res == "CANCELLED")
+                    is_success = (
+                        res.get("success", False)
+                        if isinstance(res, dict)
+                        else (final_res.startswith("AGENT_COMPLETED") if isinstance(final_res, str) else False)
+                    )
+
+                    if is_cancelled:
+                        self.last_agent_result = "CANCELLED"
+                        log_executor(f"Agent task cancelled: {final_res}")
+                    elif not is_success:
+                        self.last_agent_result = "FAILED"
+                        self.last_agent_error = final_res or "Agent task failed to complete goal."
+                        log_executor(f"Agent task failed: {final_res}")
+                    else:
+                        self.last_agent_result = "COMPLETED"
+                        self.last_agent_error = None
+                        log_executor(f"Agent task completed: {final_res}")
+                except Exception as err:
+                    self.last_agent_result = "ERROR"
+                    self.last_agent_error = str(err)
+                    log_executor(f"Agent task unhandled error: {err}")
+                finally:
+                    with self.state._lock:
+                        self.state.agent_running = False
+                        try:
+                            browser_active = bool(
+                                self.browser and hasattr(self.browser, "is_active") and self.browser.is_active()
+                            )
+                        except Exception:
+                            browser_active = False
+                        if browser_active:
+                            self.state.set_browser_ownership(BrowserOwnership.LIGHT)
+                        else:
+                            self.state.set_browser_ownership(BrowserOwnership.NONE)
+
+            worker_thread = threading.Thread(
+                target=_agent_worker,
+                name="LIGHT-AgentWorker",
+                daemon=True,
+            )
+            with self._agent_lock:
+                self._agent_thread = worker_thread
+            worker_thread.start()
 
         # ==========================================
         # WAIT
@@ -417,8 +469,13 @@ class Executor:
                         self.browser_agent.cancel()
                 except Exception:
                     pass
-            self.state.agent_running = False
-            self.state.set_browser_ownership(BrowserOwnership.NONE)
+            with self._agent_lock:
+                worker = self._agent_thread
+            if worker and worker.is_alive() and worker is not threading.current_thread():
+                worker.join(timeout=0.2)
+            with self.state._lock:
+                self.state.agent_running = False
+                self.state.set_browser_ownership(BrowserOwnership.NONE)
             self.browser.close()
             return "STOP"
 
@@ -434,6 +491,38 @@ class Executor:
 
         return "OK"
 
+    def join_agent(self, timeout: float = 1.0) -> bool:
+        """
+        Wait for active background agent worker to finish, up to `timeout` seconds.
+        Returns True if thread is no longer alive, False if timed out.
+        """
+        with self._agent_lock:
+            worker = self._agent_thread
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=timeout)
+            return not worker.is_alive()
+        return True
+
+    def close(self, timeout: float = 0.5):
+        """Clean up executor resources and ensure background agent worker is cancelled and joined."""
+        if hasattr(self, "browser_agent") and self.browser_agent:
+            try:
+                if hasattr(self.browser_agent, "cancel"):
+                    self.browser_agent.cancel()
+            except Exception:
+                pass
+        with self._agent_lock:
+            worker = self._agent_thread
+        if worker and worker.is_alive() and worker is not threading.current_thread():
+            worker.join(timeout=timeout)
+        with self.state._lock:
+            self.state.agent_running = False
+            self.state.set_browser_ownership(BrowserOwnership.NONE)
+        try:
+            self.browser.close()
+        except Exception:
+            pass
+
     async def execute_async(
         self,
         command: Command,
@@ -442,32 +531,8 @@ class Executor:
     ) -> str:
         """
         Asynchronous executor entry point compatible with an active asyncio event loop.
-        Allows AGENT_TASK to await AutonomousBrowserAgent.execute_task directly.
+        Dispatches to execute() which handles background worker threads, desktop controls,
+        and browser operations safely.
         """
-        if command.action == Action.AGENT_TASK:
-            self.state.agent_running = True
-            self.state.set_browser_ownership(BrowserOwnership.AGENT)
-            try:
-                raw_res = await self.browser_agent.execute_task(
-                    task_prompt=command.target,
-                    cancel_event=cancel_event,
-                )
-                cancelled = (cancel_event is not None and cancel_event.is_set()) or raw_res == "CANCELLED"
-                if cancelled:
-                    log_executor(f"Agent task cancelled: {raw_res}")
-                    return "CANCELLED"
-                if not raw_res.startswith("AGENT_COMPLETED"):
-                    log_executor(f"Agent task failed: {raw_res}")
-                    raise RuntimeError(raw_res or "Agent task failed to complete goal.")
-                log_executor(f"Agent task completed: {raw_res}")
-                self.state.record_command(raw_text or "", command)
-                return "OK"
-            finally:
-                self.state.agent_running = False
-                if self.browser.is_active():
-                    self.state.set_browser_ownership(BrowserOwnership.LIGHT)
-                else:
-                    self.state.set_browser_ownership(BrowserOwnership.NONE)
-
         return self.execute(command, raw_text=raw_text, cancel_event=cancel_event)
 

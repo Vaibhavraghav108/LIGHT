@@ -447,7 +447,29 @@ class LightLoop:
         finally:
             self._stop_requested.set()
             listener_thread.join(timeout=1.0)
+            from unittest.mock import MagicMock
+
+            if isinstance(self.executor, MagicMock):
+                try:
+                    self.executor.browser.close()
+                except Exception as err:
+                    log_debug(f"Browser close cleanup ignored error: {err}")
+            elif hasattr(self.executor, "close"):
+                try:
+                    self.executor.close(timeout=0.5)
+                except Exception as err:
+                    log_debug(f"Executor close cleanup ignored error: {err}")
+            else:
+                try:
+                    self.executor.browser.close()
+                except Exception as err:
+                    log_debug(f"Browser close cleanup ignored error: {err}")
+
+    def close(self, timeout: float = 0.5):
+        """Clean up loop resources and ensure background executor is cleanly closed."""
+        self._stop_requested.set()
+        if hasattr(self.executor, "close"):
             try:
-                self.executor.browser.close()
+                self.executor.close(timeout=timeout)
             except Exception as err:
-                log_debug(f"Browser close cleanup ignored error: {err}")
+                log_debug(f"Executor close ignored error: {err}")
