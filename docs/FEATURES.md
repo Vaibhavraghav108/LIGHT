@@ -79,7 +79,9 @@
 | **Event-Loop-Safe Execution** | `[x]` | Native async task runner (`execute_task`) compatible with LIGHT's active event loop (no `asyncio.run()` crash).| *(Agent execution in async loop)* | [`browser/agent.py`](file:///c:/Projects/LIGHT/browser/agent.py) | `tests/test_new_features.py` |
 | **Immediate Agent STOP Abort** | `[x]` | Immediately aborts active Browser Use exploration loop when user utters `"Stop"` or `"Cancel"`. | `"Stop"` *(during research)* | [`browser/agent.py`](file:///c:/Projects/LIGHT/browser/agent.py) | `tests/test_new_features.py` |
 | **Browser Ownership Model** | `[x]` | Isolates Browser Use (`AGENT`) from Playwright (`LIGHT`), preventing session collisions. | *(Handover & return logging)* | [`core/state.py`](file:///c:/Projects/LIGHT/core/state.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py` |
-| **Concurrent Desktop Execution**| `[x]` | Desktop commands (`Open Notepad`, hotkeys) execute unimpeded while agent runs in background. | `"Open Notepad"` *(during research)* | [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py` |
+| **Managed Background Worker**| `[x]` | Dispatches `AGENT_TASK` to dedicated `LIGHT-AgentWorker` thread, returning `OK` immediately to keep consumer loop responsive. | *(Agent task background execution)* | [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py` |
+| **Duplicate Agent Protection**| `[x]` | Rejects new `AGENT_TASK` invocations (`REJECTED`) when an agent worker is already actively running. | *(Second agent request)* | [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py` |
+| **Concurrent Command Execution**| `[x]` | Desktop commands (`Open Notepad`, hotkeys) and normal browser actions execute unimpeded while agent runs in background. | `"Open Notepad"`, `"Volume up"` *(during research)* | [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py` |
 
 ---
 

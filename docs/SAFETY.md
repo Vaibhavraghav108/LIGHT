@@ -17,10 +17,11 @@
 | **7** | **Loud Failures (Zero False Positives)** | When an action or verification fails, it raises an exception and logs `[ERROR]`. Never reports `[EXECUTOR] OK`. | Silent degradation, cascading downstream errors, user deception. |
 | **8** | **Pruning Dependent Queued Actions** | `cancel_dependent_after_failure()` automatically cancels downstream dependent actions in a compound batch if a prerequisite fails. | Executing a click or copy after a search failed, corrupting system state. |
 | **9** | **Foreground Window Focus Guard** | `computer/screen.py` verifies foreground window before keystrokes are typed via `KeyboardController`. | Keystrokes typed into background terminal, IDE, or personal chat window. |
-| **10**| **Test Suite Protection Guarantee** | All 119 tests are permanent product contracts. No test may be deleted, commented out, or bypassed. | Masked regressions, degraded product quality, silent feature loss. |
+| **10**| **Test Suite Protection Guarantee** | All 127 tests are permanent product contracts. No test may be deleted, commented out, or bypassed. | Masked regressions, degraded product quality, silent feature loss. |
 | **11**| **Non-Blocking Background Listening** | Audio ingestion runs on a dedicated background thread (`_listener_worker`), never blocked by action execution. | Dropped speech, microphone lag, user inability to issue commands. |
 | **12**| **Safe Application Process Boundaries** | `AppController` tracks created PIDs and closes only LIGHT-spawned processes. Never executes destructive `taskkill /F` on shared browsers. | Accidental closure of user's personal browser tabs or unsaved work. |
 | **13**| **Read-Only Database Ingestion** | `Handy` opens SQLite in read-only URI mode (`file:{path}?mode=ro`) with strict timeouts. | Locking conflicts with external Handy STT process, dropping live audio. |
+| **14**| **Background Agent Worker Isolation** | `AGENT_TASK` executes on managed `LIGHT-AgentWorker` thread; duplicates are rejected (`REJECTED`); thread is joined within bounded timeout on STOP or shutdown. | Consumer loop stalled for minutes; duplicate browser sessions and CPU starvation. |
 
 ---
 
@@ -41,7 +42,7 @@ is_explicit_stop_or_cancel() == True              command_queue.cancel_event.set
       ▼                                                        ▼
 Enqueue CommandPriority.STOP                      Interrupt Active Workers:
       │                                           ├── Interrupt WAIT loops
-      ▼                                           ├── Abort Browser Use agent
+      ▼                                           ├── Abort & join LIGHT-AgentWorker
 Immediate Consumer Dispatch                       └── Prune pending normal queue
       │
       ▼

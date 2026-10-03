@@ -4,13 +4,28 @@
 
 ---
 
-## [Unreleased] — Engineering Memory & CI Foundation
-*Current Branch: `feature/project-engineering-system`*
+## [Commit d9ad00c / PR #2] — 2026-10-04
+*Commit: `d9ad00c` (Merged via PR #2 `12e5fbc`) — "fix: run agent tasks in background"*
+
+### Added
+- **Managed Background Agent Worker (`LIGHT-AgentWorker`)**: Offloaded `Action.AGENT_TASK` execution in [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) to a dedicated managed daemon thread, returning `OK` immediately to the consumer loop instead of blocking the main thread for minutes.
+- **Continuous Command Concurrency**: Allowed normal high-frequency commands (`"Open YouTube"`, `"Open Google"`, `"Close Notepad"`) to execute immediately without queuing delays (`queue_wait` reduced from ~260s to <1ms) while an autonomous agent runs in the background.
+- **Duplicate Task Protection**: Rejects secondary `AGENT_TASK` invocations with `ActionExecutionResult.REJECTED` when an agent worker is already actively running.
+- **Bounded Worker Preemption & Shutdown**: Implemented `join_agent()` and `close()` in `Executor` to cancel `cancel_event` and safely join the background worker thread (<300ms on STOP, 500ms on loop shutdown).
+- **Graceful Loop Teardown**: Updated `core/loop.py` to close and join background executor workers in its `finally` block and `close()` handler.
+
+### Tests
+- Added 8 comprehensive regression tests (Tests A–H, tests 45–52) in [`tests/test_new_features.py`](file:///c:/Projects/LIGHT/tests/test_new_features.py), bringing the test suite to **127 tests (123 passed, 4 skipped)**.
+
+---
+
+## [Commit 1c8ad89 / PR #1] — 2026-10-04
+*Commit: `1c8ad89` (Merged via PR #1 `20a1187`) — "Add engineering memory suite, AI agent contract, safety invariants, and Windows CI"*
 
 ### Added
 - Standardized engineering memory suite under [`docs/`](file:///c:/Projects/LIGHT/docs/) including `PRODUCT_SPEC.md`, `ARCHITECTURE.md`, `FEATURES.md`, `CHANGELOG.md`, `DECISIONS.md`, `ROADMAP.md`, `TESTING.md`, `SAFETY.md`, and `TROUBLESHOOTING.md`.
 - AI Agent Contract [`AGENTS.md`](file:///c:/Projects/LIGHT/AGENTS.md) in repository root detailing operational invariants, modification workflows, and prohibited behaviors.
-- Windows GitHub Actions continuous integration workflow [`.github/workflows/tests.yml`](file:///c:/Projects/LIGHT/.github/workflows/tests.yml) executing the full 119-test discovery suite.
+- Windows GitHub Actions continuous integration workflow [`.github/workflows/tests.yml`](file:///c:/Projects/LIGHT/.github/workflows/tests.yml) executing the full discovery test suite.
 - Tracked logs directory via [`logs/.gitkeep`](file:///c:/Projects/LIGHT/logs/.gitkeep) with `.gitignore` exclusion rules for runtime logs.
 
 ### Reliability
