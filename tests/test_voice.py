@@ -134,6 +134,8 @@ class TestHandyVoiceAndLoop(unittest.TestCase):
             res.returncode = 0
             if cmd[0] == "powershell":
                 res.stdout = f"9264\n25168\n{os.getpid()}\n"
+            elif cmd[0] == "ps":
+                res.stdout = f"9264 0 python main.py\n25168 0 python main.py\n{os.getpid()} 0 python main.py\n"
             else:
                 res.stdout = ""
             return res

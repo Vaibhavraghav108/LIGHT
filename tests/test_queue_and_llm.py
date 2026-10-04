@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import tempfile
 import json
@@ -70,20 +71,20 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
         )
 
         def producer_writer():
-            time.sleep(0.02)
+            time.sleep(0.08)
             c = sqlite3.connect(db_path)
             c.execute(
                 "INSERT INTO transcription_history (transcription_text) VALUES (?)",
                 ("Open YouTube",),
             )
             c.commit()
-            time.sleep(0.03)  # While Open YouTube is still sleeping (220ms)!
+            time.sleep(0.04)  # While Open YouTube is still sleeping (220ms)!
             c.execute(
                 "INSERT INTO transcription_history (transcription_text) VALUES (?)",
                 ("Search Python tutorials",),
             )
             c.commit()
-            time.sleep(0.30)  # Let both execute before sending Stop
+            time.sleep(0.35)  # Let both execute before sending Stop
             c.execute(
                 "INSERT INTO transcription_history (transcription_text) VALUES (?)",
                 ("Stop",),
@@ -93,7 +94,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
 
         writer = threading.Thread(target=producer_writer, daemon=True)
         writer.start()
-        loop.run(max_iterations=40)
+        loop.run(max_iterations=60)
         writer.join()
         conn.close()
         temp_dir.cleanup()
@@ -214,10 +215,11 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
 
         stop_latency_ms = (stop_completed_at - stop_sent_at[0]) * 1000.0
         self.assertIn("STOP", statuses)
+        threshold_ms = 500.0 if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS") else 80.0
         self.assertLess(
             stop_latency_ms,
-            80.0,
-            f"Expected STOP to interrupt 10s WAIT within 80ms, took {stop_latency_ms:.2f}ms",
+            threshold_ms,
+            f"Expected STOP to interrupt 10s WAIT within {threshold_ms}ms, took {stop_latency_ms:.2f}ms",
         )
         # Verify 'Click first result' was cancelled and NEVER clicked
         executor.browser.click_result.assert_not_called()

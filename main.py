@@ -4,7 +4,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from voice.handy import Handy
+from computer.platform_factory import get_platform_controller
+from voice.factory import get_voice_provider
 from brain.laya import Laya
 from core.executor import Executor
 from core.loop import LightLoop
@@ -29,13 +30,15 @@ def _get_protected_pids() -> set[int]:
 
 
 def _kill_pid_tree(pid: int, protected_pids: set[int] | None = None) -> bool:
-    """Terminate a stale process and its child tree on Windows if it is not our own process/shim."""
+    """Terminate a stale process and its child tree if it is not our own process/shim."""
     protected = protected_pids or _get_protected_pids()
     if pid <= 0 or pid in protected:
         return False
     try:
+        platform = get_platform_controller()
+        cmd = platform.get_kill_pid_tree_command(pid)
         res = subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            cmd,
             capture_output=True,
             text=True,
             timeout=3,
@@ -71,32 +74,20 @@ def ensure_single_instance(pid_file: Path = PID_FILE) -> list[int]:
         except Exception as err:
             log_debug(f"PID file check skipped: {err}")
 
-    # 2. Scan Windows process table for any other `python* main.py` instance
+    # 2. Scan process table for any other `python* main.py` instance
     try:
-        ps_cmd = (
-            "Get-CimInstance Win32_Process -Filter \"Name LIKE 'python%'\" "
-            "| Where-Object { $_.CommandLine -match '(^|[\\\\/\"\\s])main\\.py(\\s|\"|$)' } "
-            "| ForEach-Object { \"$($_.ProcessId):$($_.ParentProcessId)\" }"
-        )
+        platform = get_platform_controller()
+        scan_cmd = platform.get_process_scan_command("main.py")
         proc = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            scan_cmd,
             capture_output=True,
             text=True,
             timeout=4,
         )
-        rows: list[tuple[int, int]] = []
-        for line in (proc.stdout or "").splitlines():
-            line = line.strip()
-            if ":" in line:
-                p_str, pp_str = line.split(":", 1)
-                if p_str.isdigit() and pp_str.isdigit():
-                    p_id, pp_id = int(p_str), int(pp_str)
-                    rows.append((p_id, pp_id))
-                    # If any process is an ancestor of our current process, protect it too
-                    if p_id in protected_pids and pp_id > 0:
-                        protected_pids.add(pp_id)
-            elif line.isdigit():
-                rows.append((int(line), 0))
+        rows: list[tuple[int, int]] = platform.parse_process_scan_output(proc.stdout or "")
+        for p_id, pp_id in rows:
+            if p_id in protected_pids and pp_id > 0:
+                protected_pids.add(pp_id)
 
         for candidate_pid, candidate_ppid in rows:
             if (
@@ -136,13 +127,13 @@ def main():
 
     # Load components
     state = LightState()
-    handy = Handy()
+    voice_provider = get_voice_provider()
     laya = Laya()
     executor = Executor(state=state)
 
     # Create LIGHT loop
     light = LightLoop(
-        handy=handy,
+        handy=voice_provider,
         laya=laya,
         executor=executor,
         state=state,

@@ -2034,6 +2034,7 @@ class BrowserController:
                                 setExactValue();
                             }
                         };
+                        active.addEventListener('input', listener);
                         const interval = setInterval(() => {
                             if (Date.now() <= expiresAt && active.value !== typedText) {
                                 setExactValue();

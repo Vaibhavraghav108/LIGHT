@@ -21,14 +21,10 @@ def _load_env_file():
 
 _load_env_file()
 
+from computer.platform_factory import get_platform_controller
+
 # Speech-to-Text (Handy SQLite Database)
-DEFAULT_HANDY_DB = (
-    Path.home()
-    / "AppData"
-    / "Roaming"
-    / "com.pais.handy"
-    / "history.db"
-)
+DEFAULT_HANDY_DB = get_platform_controller().get_default_handy_db_path()
 HANDY_DB_PATH = Path(os.environ.get("HANDY_DB_PATH", str(DEFAULT_HANDY_DB)))
 
 # Laya Model
@@ -96,29 +92,13 @@ KNOWN_APPS = {
 
 
 def get_brave_candidate_paths() -> list[Path]:
-    """Return standard Windows installation paths for Brave Browser."""
-    custom = os.environ.get("BRAVE_EXECUTABLE_PATH")
-    paths = [Path(custom)] if custom else []
-    for env_key in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
-        base = os.environ.get(env_key, "")
-        if base:
-            paths.append(
-                Path(base) / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe"
-            )
-    return paths
+    """Return standard installation paths for Brave Browser across platforms."""
+    return get_platform_controller().get_browser_candidate_paths("brave")
 
 
 def get_chrome_candidate_paths() -> list[Path]:
-    """Return standard Windows installation paths for Google Chrome."""
-    custom = os.environ.get("CHROME_EXECUTABLE_PATH")
-    paths = [Path(custom)] if custom else []
-    for env_key in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
-        base = os.environ.get(env_key, "")
-        if base:
-            paths.append(
-                Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe"
-            )
-    return paths
+    """Return standard installation paths for Google Chrome across platforms."""
+    return get_platform_controller().get_browser_candidate_paths("chrome")
 
 
 WORKSPACE_PLAYWRIGHT_DIR = Path(__file__).resolve().parent / ".playwright-browsers"
@@ -138,4 +118,6 @@ def get_workspace_chromium_candidate_paths() -> list[Path]:
                 )
             )
         )
+        candidates.extend(sorted(WORKSPACE_PLAYWRIGHT_DIR.glob("chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium")))
+        candidates.extend(sorted(WORKSPACE_PLAYWRIGHT_DIR.glob("chromium-*/chrome-linux/chrome")))
     return candidates

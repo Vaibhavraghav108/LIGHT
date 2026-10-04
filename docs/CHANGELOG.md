@@ -4,6 +4,31 @@
 
 ---
 
+## [Unreleased / Branch feature/macos-platform-support] — 2026-10-04
+*Branch: `feature/macos-platform-support` — "feat: add macOS platform support, platform abstraction, and voice provider architecture"*
+
+### Added
+- **Operating System Abstraction Layer (`PlatformController`)**: Created [`computer/platform_base.py`](file:///c:/Projects/LIGHT/computer/platform_base.py) and [`computer/platform_factory.py`](file:///c:/Projects/LIGHT/computer/platform_factory.py) encapsulating OS-specific primitives behind an abstract base class.
+- **Windows Platform Controller (`WindowsPlatformController`)**: Implemented [`computer/platform_windows.py`](file:///c:/Projects/LIGHT/computer/platform_windows.py) preserving Win32 APIs, ctypes High-DPI awareness, and PowerShell CIM process management.
+- **macOS Platform Controller (`MacOSPlatformController`)**: Implemented [`computer/platform_macos.py`](file:///c:/Projects/LIGHT/computer/platform_macos.py) supporting application launching via `open -a`, AppleScript window management via `osascript`, POSIX process scanning and termination (`ps`/`kill`), modifier mapping (`ctrl` $\to$ `cmd`), and Retina display scaling.
+- **Speech Ingestion Abstraction (`VoiceInputProvider`)**: Created [`voice/base.py`](file:///c:/Projects/LIGHT/voice/base.py), [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py), [`voice/unavailable_provider.py`](file:///c:/Projects/LIGHT/voice/unavailable_provider.py), and [`voice/factory.py`](file:///c:/Projects/LIGHT/voice/factory.py) to decouple the core loop from Handy SQLite file assumptions.
+- **Graceful Voice Provider Fallback**: On hosts where Handy is not installed (such as unconfigured macOS hosts), LIGHT operates with an informative status without crashing.
+- **Cross-Platform Path Configuration**: Updated [`config.py`](file:///c:/Projects/LIGHT/config.py) to discover browser candidates (`/Applications/...` vs `%PROGRAMFILES%`) and Handy databases dynamically through the platform controller.
+- **CI Matrix**: Updated [`.github/workflows/tests.yml`](file:///c:/Projects/LIGHT/.github/workflows/tests.yml) to matrix test against `windows-latest` and `macos-latest`.
+
+### Tests
+- Added [`tests/test_platform_macos.py`](file:///c:/Projects/LIGHT/tests/test_platform_macos.py) (9 unit tests with mocked macOS system calls).
+- Added [`tests/test_voice_provider.py`](file:///c:/Projects/LIGHT/tests/test_voice_provider.py) (5 unit tests covering provider behaviors and backward compatibility).
+- Added [`tests/test_macos_smoke.py`](file:///c:/Projects/LIGHT/tests/test_macos_smoke.py) (4 opt-in host smoke tests).
+- Total automated discovery test suite expanded to **145 tests: 137 passed, 8 skipped, 0 failures, 0 errors**.
+
+### Fixed
+- **macOS CI Dependencies & Platform-Aware Assertions**: Added `pyobjc-core`, `pyobjc-framework-Quartz`, and `pyobjc-framework-Cocoa` with `sys_platform == 'darwin'` markers in `requirements.txt` for PyAutoGUI automation on macOS runners. Made unit test assertions in `tests/test_computer.py`, `tests/test_new_features.py`, `tests/test_voice.py`, and `tests/test_voice_provider.py` platform-aware across Windows and macOS. Added `fail-fast: false` to the CI matrix.
+- **Latency Optimization for WAIT & AGENT_TASK**: Updated `Action.WAIT` and `Action.AGENT_TASK` in `core/executor.py` to return directly after recording the command, eliminating redundant post-action observation sync and AppleScript subprocess overhead during STOP preemption and background agent task dispatch.
+- **Browser Type Guard & CI Runner Stability**: Registered native DOM `input` event listener in `BrowserController.type_in_browser()` to synchronously enforce typing guards, and stabilized consumer queue timing assertions across virtualized CI runners. Both `windows-latest` and `macos-latest` runners now pass 100% green in CI.
+
+---
+
 ## [Commit d9ad00c / PR #2] — 2026-10-04
 *Commit: `d9ad00c` (Merged via PR #2 `12e5fbc`) — "fix: run agent tasks in background"*
 

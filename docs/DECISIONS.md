@@ -215,3 +215,47 @@ Execute long-running Browser Use autonomous agent tasks (`Action.AGENT_TASK`) in
 
 ## Related Components
 - [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py), [`browser/agent.py`](file:///c:/Projects/LIGHT/browser/agent.py), [`core/state.py`](file:///c:/Projects/LIGHT/core/state.py)
+
+---
+
+# ADR-011 — Cross-Platform Operating System Abstraction (`PlatformController`)
+
+## Status
+Accepted
+
+## Decision
+Introduce an abstract `PlatformController` interface (`computer/platform_base.py`) and factory (`computer/platform_factory.py`) with OS-specific implementations (`WindowsPlatformController`, `MacOSPlatformController`). High-level desktop controllers (`AppController`, `ScreenController`, `KeyboardController`, `MouseController`) and entry points (`main.py`) delegate OS-specific operations (app launching, process scanning/killing, window management, hotkey modifier mapping, screen scaling) to the active platform controller.
+
+## Reason
+1. **Multi-Platform Support**: LIGHT must support macOS alongside Windows without duplicating high-level logic or branching on `sys.platform` throughout the codebase.
+2. **Preserving Existing Windows Contract**: Win32 APIs, DPI awareness, and PowerShell CIM process management remain 100% intact for Windows without regression.
+3. **Clean Encapsulation**: OS primitives (such as macOS `osascript` AppleScript execution and `open -a`, versus Windows Win32 `ctypes` and `taskkill`) are isolated within platform classes.
+
+## Consequences
+- **Positive**: Enables full desktop automation on macOS; standardizes window management and modifier mappings; maintains 100% backward compatibility for all existing Windows unit and smoke tests.
+- **Negative**: Adds a layer of indirection for OS calls.
+
+## Related Components
+- [`computer/platform_base.py`](file:///c:/Projects/LIGHT/computer/platform_base.py), [`computer/platform_windows.py`](file:///c:/Projects/LIGHT/computer/platform_windows.py), [`computer/platform_macos.py`](file:///c:/Projects/LIGHT/computer/platform_macos.py), [`computer/platform_factory.py`](file:///c:/Projects/LIGHT/computer/platform_factory.py), [`computer/apps.py`](file:///c:/Projects/LIGHT/computer/apps.py), [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py), [`computer/keyboard.py`](file:///c:/Projects/LIGHT/computer/keyboard.py), [`computer/mouse.py`](file:///c:/Projects/LIGHT/computer/mouse.py), [`main.py`](file:///c:/Projects/LIGHT/main.py)
+
+---
+
+# ADR-012 — Extensible Speech Ingestion (`VoiceInputProvider`)
+
+## Status
+Accepted
+
+## Decision
+Abstract speech ingestion behind the `VoiceInputProvider` interface (`voice/base.py`). Wrap Handy SQLite ingestion into `HandyVoiceProvider` (with `Handy` as a backward-compatible subclass). Provide `UnavailableVoiceProvider` and a dynamic factory (`voice/factory.py`) that checks for database availability and gracefully operates without crashing when no provider is active.
+
+## Reason
+1. **Decoupling from External Third-Party Utilities**: LIGHT core should consume transcription events without being hardcoded to the external Handy desktop application.
+2. **macOS Compatibility & Graceful Degradation**: Handy availability on macOS is unverified / third-party dependent. When missing on macOS (or unconfigured hosts), LIGHT must report an informative diagnostic status and keep voice listening idle instead of raising `FileNotFoundError` or crashing.
+3. **Future Extensibility**: Prepares the architecture for pluggable direct microphone input (e.g. local in-process Whisper) in future milestones.
+
+## Consequences
+- **Positive**: Zero crashes on hosts lacking Handy; enables test mocks without temporary SQLite tables; backward-compatible with all existing tests.
+- **Negative**: When no provider is installed, voice commands cannot be ingested until a provider is configured.
+
+## Related Components
+- [`voice/base.py`](file:///c:/Projects/LIGHT/voice/base.py), [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py), [`voice/unavailable_provider.py`](file:///c:/Projects/LIGHT/voice/unavailable_provider.py), [`voice/factory.py`](file:///c:/Projects/LIGHT/voice/factory.py), [`voice/handy.py`](file:///c:/Projects/LIGHT/voice/handy.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py)

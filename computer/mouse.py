@@ -1,17 +1,10 @@
-import ctypes
 import re
 import time
 import pyautogui
+from computer.platform_factory import get_platform_controller
 
-
-# Enable Per-Monitor DPI Awareness on Windows so PyAutoGUI uses true screen coordinates
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)
-except Exception:
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
+# Enable DPI awareness across platforms
+get_platform_controller().set_dpi_awareness()
 
 # Prevent PyAutoGUI from raising FailSafeException when the user's cursor
 # happens to be resting in a screen corner before a voice command runs.
@@ -36,7 +29,8 @@ class MouseController:
     LARGE_STEP = 300
     SCREEN_MARGIN = 5
 
-    def __init__(self):
+    def __init__(self, platform=None):
+        self.platform = platform if platform is not None else get_platform_controller()
         self._last_known_pos: tuple[int, int] = (0, 0)
 
     def get_screen_size(self) -> tuple[int, int]:
@@ -58,14 +52,10 @@ class MouseController:
         if (px, py) != (0, 0):
             self._last_known_pos = (px, py)
             return px, py
-        # If (0, 0), check whether Win32 GetCursorPos actually succeeded or returned 0 (ERROR_ACCESS_DENIED)
-        try:
-            pt = (ctypes.c_long * 2)()
-            ok = ctypes.windll.user32.GetCursorPos(pt)
-            if ok == 0 and self._last_known_pos != (0, 0):
-                return self._last_known_pos
-        except Exception:
-            pass
+        # If (0, 0), consult platform fallback
+        fallback = self.platform.get_cursor_position_fallback(self._last_known_pos)
+        if fallback != (0, 0):
+            return fallback
         return px, py
 
     def verify_and_correct_position(

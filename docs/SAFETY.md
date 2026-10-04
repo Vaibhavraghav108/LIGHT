@@ -17,11 +17,12 @@
 | **7** | **Loud Failures (Zero False Positives)** | When an action or verification fails, it raises an exception and logs `[ERROR]`. Never reports `[EXECUTOR] OK`. | Silent degradation, cascading downstream errors, user deception. |
 | **8** | **Pruning Dependent Queued Actions** | `cancel_dependent_after_failure()` automatically cancels downstream dependent actions in a compound batch if a prerequisite fails. | Executing a click or copy after a search failed, corrupting system state. |
 | **9** | **Foreground Window Focus Guard** | `computer/screen.py` verifies foreground window before keystrokes are typed via `KeyboardController`. | Keystrokes typed into background terminal, IDE, or personal chat window. |
-| **10**| **Test Suite Protection Guarantee** | All 127 tests are permanent product contracts. No test may be deleted, commented out, or bypassed. | Masked regressions, degraded product quality, silent feature loss. |
+| **10**| **Test Suite Protection Guarantee** | All 145 tests are permanent product contracts. No test may be deleted, commented out, or bypassed. | Masked regressions, degraded product quality, silent feature loss. |
 | **11**| **Non-Blocking Background Listening** | Audio ingestion runs on a dedicated background thread (`_listener_worker`), never blocked by action execution. | Dropped speech, microphone lag, user inability to issue commands. |
-| **12**| **Safe Application Process Boundaries** | `AppController` tracks created PIDs and closes only LIGHT-spawned processes. Never executes destructive `taskkill /F` on shared browsers. | Accidental closure of user's personal browser tabs or unsaved work. |
-| **13**| **Read-Only Database Ingestion** | `Handy` opens SQLite in read-only URI mode (`file:{path}?mode=ro`) with strict timeouts. | Locking conflicts with external Handy STT process, dropping live audio. |
+| **12**| **Safe Application Process Boundaries** | `AppController` tracks created PIDs and closes only LIGHT-spawned processes. Never executes destructive force kill (`taskkill /F` or `pkill`) on shared browsers. | Accidental closure of user's personal browser tabs or unsaved work. |
+| **13**| **Read-Only Database Ingestion** | `HandyVoiceProvider` opens SQLite in read-only URI mode (`file:{path}?mode=ro`) with strict timeouts. | Locking conflicts with external Handy STT process, dropping live audio. |
 | **14**| **Background Agent Worker Isolation** | `AGENT_TASK` executes on managed `LIGHT-AgentWorker` thread; duplicates are rejected (`REJECTED`); thread is joined within bounded timeout on STOP or shutdown. | Consumer loop stalled for minutes; duplicate browser sessions and CPU starvation. |
+| **15**| **Cross-Platform OS Boundaries** | Platform-specific interactions (AppleScript, Win32, POSIX) are strictly isolated in `PlatformController`. High-level core never invokes OS binaries directly. | Fragile cross-platform regressions, broken builds, security leaks. |
 
 ---
 
@@ -79,7 +80,7 @@ Even a high-scoring link may redirect to an authentication barrier, a 404 page, 
 
 ### Foreground Process Checking
 Before sending synthetic keystrokes via PyAutoGUI:
-1. `ScreenController.get_foreground_window_info()` retrieves the active Win32 window title and process name.
+1. `ScreenController.get_foreground_window_info()` retrieves the active window title and process name across Windows (Win32) and macOS (AppleScript).
 2. If the user issued a command targeting a specific application (e.g. `"type in notepad"`), the system confirms that the foreground process matches the expected target.
 3. If no target application is specified, the system confirms that a valid, non-system window is active.
 4. If the active window is desktop, taskbar, or unverified, typing is aborted with an error log.
@@ -90,5 +91,16 @@ Before sending synthetic keystrokes via PyAutoGUI:
 
 ### Process Kill Scope
 - System utilities like `taskkill /F /IM brave.exe` or `taskkill /F /IM chrome.exe` are **strictly forbidden** during normal operation.
-- Closing an application via `AppController.close()` must only terminate PIDs explicitly spawned by LIGHT, or gracefully request closure via `WM_CLOSE` window messages.
+- Closing an application via `AppController.close()` must only terminate PIDs explicitly spawned by LIGHT, or gracefully request closure via `WM_CLOSE` window messages (or POSIX `kill` on macOS).
 - The user's external browser instances, personal tabs, and unsaved documents must never be terminated.
+
+---
+
+## 6. Platform Abstraction & Isolation
+
+### Platform-Isolated Desktop Control
+1. Desktop interactions must strictly flow through `PlatformController` (`computer/platform_factory.py`).
+2. Win32-specific APIs (`ctypes.windll`, `user32`, `pygetwindow`) and PowerShell commands must remain strictly encapsulated within `WindowsPlatformController`.
+3. macOS-specific automation (`osascript`, AppleScript, `open -a`, POSIX signals) must remain strictly encapsulated within `MacOSPlatformController`.
+4. Shared core modules (`core/`, `brain/`, `browser/`) must never execute direct platform-specific system calls or hardcode platform binary paths.
+5. In environments where speech ingestion is unavailable (e.g. unverified Handy availability on macOS), `UnavailableVoiceProvider` safely idles without crashing or throwing unhandled errors.

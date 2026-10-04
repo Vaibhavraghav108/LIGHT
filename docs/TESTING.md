@@ -1,19 +1,19 @@
 # LIGHT — Comprehensive Testing Guide
 
-> **Test Suite Baseline**: Running the automated test discovery command discovers **127 tests**: **123 execute and pass**, **0 fail**, **0 errors**, and **4 opt-in host smoke tests skip by default (`OK (skipped=4)`)**.
+> **Test Suite Baseline**: Running the automated test discovery command discovers **145 tests**: **137 execute and pass**, **0 fail**, **0 errors**, and **8 opt-in host smoke tests skip by default (`OK (skipped=8)`)**.
 
 ---
 
 ## 1. Test Architecture Overview
 
-LIGHT employs a multi-tiered test suite to guarantee safety, deterministic accuracy, low-latency execution, and non-regression across all desktop and browser subsystems:
+LIGHT employs a multi-tiered test suite to guarantee safety, deterministic accuracy, low-latency execution, and non-regression across all desktop and browser subsystems on both Windows and macOS:
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
-│                   LIGHT MULTI-TIER TEST SUITE (127 TESTS)              │
+│                   LIGHT MULTI-TIER TEST SUITE (145 TESTS)              │
 ├────────────────────────────────┬───────────────────────────────────────┤
-│ Tier 1: Deterministic Unit     │ 42 Tests across voice, intent parsing,│
-│ (Isolated Mocks, <1ms parsing) │ desktop apps, screen, and browser.    │
+│ Tier 1: Deterministic Unit     │ 56 Tests across voice providers, brain│
+│ (Isolated Mocks, <1ms parsing) │ desktop apps, screen, and macOS mocks.│
 ├────────────────────────────────┼───────────────────────────────────────┤
 │ Tier 2: Real Local Browser     │ 5 Headless Playwright integration     │
 │ (ThreadingHTTPServer + DOM)    │ tests against local HTML fixtures.    │
@@ -21,8 +21,8 @@ LIGHT employs a multi-tiered test suite to guarantee safety, deterministic accur
 │ Tier 3: Queue, LLM Planning,   │ 76 Tests covering queue, Qwen planner,│
 │ Reliability & Advanced Features│ background agent worker, and ranking. │
 ├────────────────────────────────┼───────────────────────────────────────┤
-│ Tier 4: Opt-In Windows Smoke   │ 4 Host environment checks skipped     │
-│ (LIGHT_RUN_WINDOWS_SMOKE=1)    │ by default during automated runs.     │
+│ Tier 4: Opt-In Host Smoke      │ 8 Host environment checks (4 Windows, │
+│ (LIGHT_RUN_*_SMOKE=1)          │ 4 macOS) skipped by default.          │
 └────────────────────────────────┴───────────────────────────────────────┘
 ```
 
@@ -31,16 +31,21 @@ LIGHT employs a multi-tiered test suite to guarantee safety, deterministic accur
 ## 2. Test Execution Commands
 
 ### 2.1 Full Automated Discovery Suite (Default CI & Local Baseline)
-Executes all 123 unit and local browser integration tests across the repository:
+Executes all 137 unit and local browser integration tests across the repository:
 
 ```powershell
 .\lightenv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
+On macOS / Linux:
+```bash
+python -m unittest discover -s tests -v
+```
+
 **Expected Baseline Output**:
 ```text
-Ran 127 tests in ~27s
-OK (skipped=4)
+Ran 145 tests in ~24s
+OK (skipped=8)
 ```
 
 ### 2.2 Static Syntax & Compilation Check
@@ -55,13 +60,16 @@ Verifies that all Python modules compile cleanly without syntax errors:
 | Subsystem | Target Test File | Test Command | Tests |
 | :--- | :--- | :--- | :---: |
 | **Voice & Handy Loop** | `tests/test_voice.py` | `python -m unittest tests/test_voice.py -v` | 6 |
+| **Voice Providers** | `tests/test_voice_provider.py` | `python -m unittest tests/test_voice_provider.py -v` | 5 |
 | **Laya & Intent Parsing** | `tests/test_laya.py` | `python -m unittest tests/test_laya.py -v` | 16 |
 | **Desktop & Computer** | `tests/test_computer.py` | `python -m unittest tests/test_computer.py -v` | 12 |
+| **macOS Platform Unit** | `tests/test_platform_macos.py` | `python -m unittest tests/test_platform_macos.py -v` | 9 |
 | **Browser Unit** | `tests/test_browser.py` | `python -m unittest tests/test_browser.py -v` | 8 |
 | **Local Browser Integration**| `tests/test_integration_local_browser.py` | `python -m unittest tests/test_integration_local_browser.py -v`| 5 |
 | **V2 Queue & LLM Planning** | `tests/test_queue_and_llm.py` | `python -m unittest tests/test_queue_and_llm.py -v` | 24 |
 | **Reliability & Ownership** | `tests/test_new_features.py` | `python -m unittest tests/test_new_features.py -v` | 52 |
 | **Opt-In Windows Smoke** | `tests/test_windows_smoke.py` | `$env:LIGHT_RUN_WINDOWS_SMOKE="1"; python -m unittest tests/test_windows_smoke.py -v` | 4 |
+| **Opt-In macOS Smoke** | `tests/test_macos_smoke.py` | `LIGHT_RUN_MACOS_SMOKE=1 python -m unittest tests/test_macos_smoke.py -v` | 4 |
 
 ---
 
@@ -145,6 +153,14 @@ Verifies that all Python modules compile cleanly without syntax errors:
   - Verifies system clipboard write/read round-trip via `pyperclip`.
   - Verifies live screen dimensions, cursor tracking, and active window titles.
   - Verifies non-destructive read access to the host's actual Handy `history.db`.
+
+### Tier 5: Opt-In macOS Host Smoke Tests (4 Tests)
+- **`tests/test_macos_smoke.py` (4 tests, skipped by default)**:
+  - Enabled exclusively when `LIGHT_RUN_MACOS_SMOKE="1"` on a physical or hosted macOS environment.
+  - Verifies macOS Google Chrome / Brave application bundle discovery.
+  - Verifies system clipboard write/read round-trip via `pyperclip`.
+  - Verifies screen dimensions and Retina display scale factor detection.
+  - Verifies voice provider initialization and graceful fallback behavior.
 
 ---
 

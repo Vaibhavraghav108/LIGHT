@@ -6,7 +6,7 @@
 
 ## 1. Project Identity
 
-**LIGHT** is a production-grade, local-first, voice-controlled Windows and browser automation assistant.
+**LIGHT** is a production-grade, local-first, voice-controlled desktop and browser automation assistant supporting Windows and macOS.
 
 - **Primary Goal**: Deliver instantaneous, hands-free computer and browser control using ambient, continuous voice dictation without requiring cloud APIs, subscription keys, or heavyweight cognitive overhead.
 - **Product Classification**: Low-latency desktop utility and browser copilot combining deterministic parsing (<1ms) with local small language models (Qwen3 1.7B via Ollama) and an isolated autonomous web agent (Browser Use).
@@ -80,6 +80,7 @@ Every engineer and AI assistant modifying LIGHT must honor these seventeen found
 15. **Preserve Local-First Behavior**: LIGHT must function completely offline (or over localhost Ollama). Never introduce mandatory cloud APIs or remote telemetry.
 16. **Do Not Add Cloud Dependencies Casually**: Keep core dependencies lean. Do not add OpenAI, Anthropic, or external cloud SDKs to default execution paths.
 17. **Autonomous Agent Tasks Must Not Block Normal Command Execution**: Long-running exploratory research tasks (`AGENT_TASK`) must execute on a managed background worker (`LIGHT-AgentWorker`). The consumer loop must return immediately and process subsequent desktop and browser commands without waiting for agent completion.
+18. **Honor Platform Abstraction Boundaries**: Desktop and operating system interactions must flow through `PlatformController` (`computer/platform_factory.py`). Never introduce OS-specific calls (e.g. Win32 `ctypes`, AppleScript `osascript`, `taskkill`) directly into shared core logic.
 
 ---
 

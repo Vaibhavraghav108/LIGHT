@@ -12,8 +12,12 @@ on:
 
 jobs:
   test:
-    name: Unit & Browser Integration Tests (Windows)
-    runs-on: windows-latest
+    name: Unit & Browser Integration Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
     timeout-minutes: 15
 
     steps:

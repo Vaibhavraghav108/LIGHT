@@ -1,10 +1,13 @@
 # Decision engine
 laya
 
-# Windows computer control, window observation, & clipboard
+# Computer control, window observation, & clipboard
 pyautogui
-pygetwindow
+pygetwindow; sys_platform == 'win32'
 pyperclip
+pyobjc-core; sys_platform == 'darwin'
+pyobjc-framework-Quartz; sys_platform == 'darwin'
+pyobjc-framework-Cocoa; sys_platform == 'darwin'
 
 # Browser automation (Brave / Chromium)
 playwright

@@ -60,15 +60,17 @@ computer/                browser/browser.py       browser/agent.py
 
 ## 2. Pipeline Execution Layers
 
-### Layer 1: Speech Ingestion & Polling (`voice/`)
-- **Component**: [`voice/handy.py`](file:///c:/Projects/LIGHT/voice/handy.py)
-- **Role**: Reads transcription records produced by the local Handy speech-to-text service from SQLite (`history.db`).
+### Layer 1: Speech Ingestion & Voice Providers (`voice/`)
+- **Components**: [`voice/base.py`](file:///c:/Projects/LIGHT/voice/base.py), [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py), [`voice/unavailable_provider.py`](file:///c:/Projects/LIGHT/voice/unavailable_provider.py), [`voice/factory.py`](file:///c:/Projects/LIGHT/voice/factory.py), [`voice/handy.py`](file:///c:/Projects/LIGHT/voice/handy.py)
+- **Role**: Decouples audio and speech-to-text sources behind the `VoiceInputProvider` interface.
 - **Data Flow**:
-  - `Handy.get_transcriptions_since(last_id)` retrieves all new transcriptions since the last processed ID in monotonic order.
-  - Opens the database in read-only URI mode (`file:{path}?mode=ro`) with a strict 1.5s timeout to prevent locking conflicts with the external Handy process.
+  - `get_voice_provider()` dynamically resolves the appropriate provider based on OS and database presence.
+  - On Windows (and macOS with Handy installed), `HandyVoiceProvider` reads SQLite (`history.db`) in read-only URI mode (`file:{path}?mode=ro`) with a strict 1.5s timeout.
+  - If Handy is not detected (e.g. unconfigured macOS hosts), `UnavailableVoiceProvider` informs the core gracefully without crashing or throwing unhandled database errors.
 - **Key Invariants**:
   - Never writes to or locks the Handy database.
   - Recovers gracefully from locked database errors (`sqlite3.OperationalError: database is locked`) without crashing the voice loop.
+  - Voice providers remain decoupled from downstream command planning and execution.
 
 ### Layer 2: Concurrency & Command Queue (`core/`)
 - **Components**: [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py), [`core/queue_manager.py`](file:///c:/Projects/LIGHT/core/queue_manager.py)
@@ -222,13 +224,14 @@ User Request: "click official repository" (Context: LangGraph)
 
 | Component | File Path | Inbound Dependencies | Outbound Dependencies | Key Invariants | AI Agent Cautions |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Handy Reader** | [`voice/handy.py`](file:///c:/Projects/LIGHT/voice/handy.py) | `core/loop.py` | `sqlite3`, `config.py` | Read-only SQLite mode; monotonic ID ordering. | Do not write to `history.db` or alter table schemas. |
+| **Voice Provider** | [`voice/base.py`](file:///c:/Projects/LIGHT/voice/base.py), [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py) | `core/loop.py` | `sqlite3`, `config.py` | Read-only SQLite mode; monotonic ID ordering; graceful fallback. | Do not assume Handy exists on macOS; handle unavailable provider gracefully. |
 | **Command Queue** | [`core/queue_manager.py`](file:///c:/Projects/LIGHT/core/queue_manager.py) | `core/loop.py` | `threading`, `time` | STOP preemption <5ms; priority ordering; thread-safe. | Never remove `cancel_event` or bypass queue locks. |
-| **Voice Loop** | [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py) | `main.py` | `voice/handy.py`, `core/queue_manager.py`, `core/executor.py` | Listener thread decoupled from consumer execution. | Never execute blocking actions inside `_listener_worker`. |
+| **Voice Loop** | [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py) | `main.py` | `voice/factory.py`, `core/queue_manager.py`, `core/executor.py` | Listener thread decoupled from consumer execution. | Never execute blocking actions inside `_listener_worker`. |
 | **Decision Engine** | [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py) | `brain/laya.py` | `brain/commands.py`, `config.py` | Multi-step fast path <1ms; strictly typed `Command` output. | Do not add network calls or slow operations to deterministic parsing. |
 | **LLM Planner** | [`brain/llm.py`](file:///c:/Projects/LIGHT/brain/llm.py) | `brain/laya.py` | `urllib`, `config.py` | Local Ollama only; timeout-guarded; plan normalized. | Never add cloud API keys; sanitize `/no_think` tokens. |
 | **Browser Controller**| [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py) | `core/executor.py` | `playwright`, `config.py` | Single active session; DPI screen conversion; semantic verification. | Never fall back to blind result #1 clicking on named targets. |
 | **Browser Agent** | [`browser/agent.py`](file:///c:/Projects/LIGHT/browser/agent.py) | `core/executor.py` | `browser_use`, `ollama` | Async-safe (`execute_task`); immediate STOP preemption. | Do not call `asyncio.run()` within an existing event loop. |
-| **App Controller** | [`computer/apps.py`](file:///c:/Projects/LIGHT/computer/apps.py) | `core/executor.py` | `subprocess`, `psutil` | Clean process tracking; no destructive `taskkill` on shared browsers. | Protect system processes and launcher PID trees. |
-| **Screen Controller**| [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py) | `core/executor.py` | `pygetwindow`, `ctypes` | High-DPI awareness; foreground window verification. | Always verify foreground before typing text. |
+| **Platform Controller**| [`computer/platform_factory.py`](file:///c:/Projects/LIGHT/computer/platform_factory.py) | `computer/*`, `main.py` | `platform_windows.py`, `platform_macos.py` | OS isolation behind abstract interface; zero cross-platform regressions. | Only OS-specific operations belong in concrete platform implementations. |
+| **App Controller** | [`computer/apps.py`](file:///c:/Projects/LIGHT/computer/apps.py) | `core/executor.py` | `computer/platform_factory.py`, `subprocess`, `psutil` | Clean process tracking; no destructive force kill on shared browsers. | Protect system processes and launcher PID trees across OS targets. |
+| **Screen Controller**| [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py) | `core/executor.py` | `computer/platform_factory.py`, `pyautogui` | High-DPI/Retina awareness; foreground window verification. | Always verify foreground before typing text. |
 | **State Tracker** | [`core/state.py`](file:///c:/Projects/LIGHT/core/state.py) | All subsystems | `brain/commands.py` | Thread-safe locks; explicit ownership transitions. | Use `clone_for_planning()` during multi-command planning. |

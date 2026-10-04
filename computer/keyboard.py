@@ -2,7 +2,7 @@ import random
 import time
 
 import pyautogui
-
+from computer.platform_factory import get_platform_controller
 
 KEY_ALIASES = {
     "escape": "esc",
@@ -21,6 +21,9 @@ KEY_ALIASES = {
 
 
 class KeyboardController:
+
+    def __init__(self, platform=None):
+        self.platform = platform if platform is not None else get_platform_controller()
 
     def type_text(self, text: str):
         """
@@ -45,5 +48,6 @@ class KeyboardController:
         """Press a keyboard shortcut in the currently focused application."""
         if not keys:
             raise ValueError("At least one key is required.")
-        normalized = [KEY_ALIASES.get(key.lower().strip(), key.lower().strip()) for key in keys]
+        mapped = self.platform.map_hotkey(*keys)
+        normalized = [KEY_ALIASES.get(k.lower().strip(), k.lower().strip()) for k in mapped]
         pyautogui.hotkey(*normalized)

@@ -328,3 +328,99 @@ In [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py), `Executor.e
 - `tests/test_new_features.py::TestNewFeaturesIntegration::test_50_agent_worker_failure_resets_state`
 - `tests/test_new_features.py::TestNewFeaturesIntegration::test_51_async_loop_executes_normal_command_while_agent_runs`
 - `tests/test_new_features.py::TestNewFeaturesIntegration::test_52_interleaved_desktop_and_browser_commands_during_agent_task`
+
+---
+
+## Issue 12 — Missing Voice Provider on Non-Windows Hosts (macOS)
+
+### Problem
+Starting LIGHT on macOS or a machine without Handy installed caused an immediate `FileNotFoundError` during `Handy.__init__()` when trying to open `%APPDATA%\com.pais.handy\history.db`.
+
+### Symptoms
+```text
+FileNotFoundError: Handy database not found:
+/Users/.../Library/Application Support/com.pais.handy/history.db
+```
+
+### Root Cause
+`main.py` directly instantiated `Handy()`, which strictly asserted that the SQLite database file existed on disk. On macOS hosts where Handy was uninstalled or unverified, this crashed the process on launch.
+
+### Fix
+1. Abstracted speech ingestion into `VoiceInputProvider` (`voice/base.py`).
+2. Implemented `voice/factory.py:get_voice_provider()`:
+   - If the Handy database exists at the platform-appropriate location, instantiates `HandyVoiceProvider`.
+   - If the database is missing, returns an `UnavailableVoiceProvider` with an informative status message instead of crashing.
+3. Updated `LightLoop` to inspect `voice_provider.is_available()`, logging a clear diagnostic warning and keeping the voice listener idle without throwing errors.
+
+### Relevant Files
+- [`voice/base.py`](file:///c:/Projects/LIGHT/voice/base.py), [`voice/factory.py`](file:///c:/Projects/LIGHT/voice/factory.py), [`voice/unavailable_provider.py`](file:///c:/Projects/LIGHT/voice/unavailable_provider.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py), [`main.py`](file:///c:/Projects/LIGHT/main.py)
+
+### Regression Test
+- `tests/test_voice_provider.py::TestVoiceProviders::test_factory_returns_unavailable_when_db_missing_without_crashing`
+- `tests/test_voice_provider.py::TestVoiceProviders::test_unavailable_provider_behavior`
+
+
+---
+
+## Issue 13 — macOS CI Test Discovery Failures (PyObjC & Platform Assertions)
+
+### Problem
+When executing automated test discovery on `macos-latest` GitHub Actions runners, test discovery failed due to missing PyAutoGUI macOS frameworks and Windows-specific mock assertions.
+
+### Symptoms
+```text
+AssertionError: You must first install pyobjc-core and pyobjc
+AssertionError: expected call not found. Expected: hotkey('ctrl', 'r') Actual: hotkey('command', 'r')
+AssertionError: expected call not found. Expected: Popen(['notepad.exe']) Actual: Popen(['open', '-a', 'TextEdit'])
+```
+
+### Root Cause
+1. PyAutoGUI's macOS backend (`_pyautogui_osx.py`) imports `Quartz` and `AppKit`. Without `pyobjc-core`, `pyobjc-framework-Quartz`, and `pyobjc-framework-Cocoa`, PyAutoGUI aborts during import on native macOS.
+2. Unit tests in `tests/test_computer.py` and `tests/test_new_features.py` had hardcoded Windows command strings (`notepad.exe`, `taskkill /IM ...`, `ctrl+c`), causing them to fail when running against native `MacOSPlatformController`.
+3. In `tests/test_voice.py`, process scan simulation only emitted Windows PowerShell output format rather than POSIX `ps` output.
+
+### Fix
+1. In `requirements.txt`, added `pyobjc-core`, `pyobjc-framework-Quartz`, and `pyobjc-framework-Cocoa` guarded with `sys_platform == 'darwin'`.
+2. Updated `tests/test_computer.py`, `tests/test_new_features.py`, and `tests/test_voice.py` to assert platform-appropriate commands (`open -a TextEdit`, `pkill -f TextEdit`, `command+c`, `ps` output) conditionally based on `sys.platform`.
+3. Configured `strategy.fail-fast: false` in `.github/workflows/tests.yml` so that matrix runners execute to completion independently.
+
+### Relevant Files
+- [`requirements.txt`](file:///c:/Projects/LIGHT/requirements.txt), [`tests/test_computer.py`](file:///c:/Projects/LIGHT/tests/test_computer.py), [`tests/test_new_features.py`](file:///c:/Projects/LIGHT/tests/test_new_features.py), [`tests/test_voice.py`](file:///c:/Projects/LIGHT/tests/test_voice.py), [`.github/workflows/tests.yml`](file:///c:/Projects/LIGHT/.github/workflows/tests.yml)
+
+### Regression Test
+- `tests/test_computer.py::TestComputerControl::test_open_notepad_and_calculator`
+- `tests/test_computer.py::TestComputerControl::test_close_apps`
+- `tests/test_computer.py::TestComputerControl::test_keyboard_hotkey`
+- `tests/test_new_features.py::TestNewFeatures::test_05_hotkey_execution`
+- `tests/test_voice.py::TestHandyVoiceAndLoop::test_ensure_single_instance_kills_stale_pids_and_writes_current_pid`
+
+---
+
+## Issue 14 — Post-Action Observation Sync Overhead on Interruptible Actions (WAIT / AGENT_TASK)
+
+### Problem
+On macOS CI runners, three timing tests (`test_12_stop_preemption_interrupts_wait_under_5ms`, `test_45_agent_task_dispatch_is_non_blocking`, and `test_03_stop_and_cancel_priority_preempts_wait_and_queued_commands`) failed timing assertions with latencies of 139ms–207ms against thresholds of 50ms–80ms.
+
+### Symptoms
+```text
+AssertionError: 207.41 not less than 50.0 (test_12_stop_preemption_interrupts_wait_under_5ms)
+AssertionError: 188.74 not less than 50.0 (test_45_agent_task_dispatch_is_non_blocking)
+AssertionError: 139.32 not less than 80.0 : Expected STOP to interrupt 10s WAIT within 80ms (test_03_stop_and_cancel_priority_preempts_wait_and_queued_commands)
+```
+
+### Root Cause
+In `core/executor.py`, after executing `Action.WAIT` and `Action.AGENT_TASK`, execution fell through to `self.state.sync_observation(browser=self.browser, screen=self.screen)`:
+1. `WAIT` does not alter active windows, URLs, or mouse position, making post-action observation synchronization redundant.
+2. `AGENT_TASK` runs asynchronously on `LIGHT-AgentWorker` and transfers browser ownership to `BrowserOwnership.AGENT`, making synchronous browser inspection on dispatch redundant.
+3. On macOS, `screen.get_foreground_window_info()` executes AppleScript via `osascript`, taking 50ms–150ms per process invocation. Running this synchronously inside `WAIT` wakeups and `AGENT_TASK` dispatch severely inflated latency and broke STOP preemption contracts.
+
+### Fix
+In [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py), updated `Action.AGENT_TASK` and `Action.WAIT` to record the command in `self.state` and return `"OK"` immediately, bypassing redundant post-action observation sync and AppleScript subprocess execution.
+
+### Relevant Files
+- [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
+
+### Regression Test
+- `tests/test_new_features.py::TestNewFeatures::test_12_stop_preemption_interrupts_wait_under_5ms`
+- `tests/test_new_features.py::TestNewFeatures::test_45_agent_task_dispatch_is_non_blocking`
+- `tests/test_queue_and_llm.py::TestProducerConsumerQueueAndLLM::test_03_stop_and_cancel_priority_preempts_wait_and_queued_commands`

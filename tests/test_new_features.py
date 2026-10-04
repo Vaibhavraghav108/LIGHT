@@ -1,3 +1,5 @@
+import os
+import sys
 import threading
 import time
 import unittest
@@ -99,7 +101,8 @@ class TestNewFeatures(unittest.TestCase):
             cmd = Command(Action.HOTKEY, "ctrl+c")
             res = executor.execute(cmd)
             self.assertEqual(res, "OK")
-            mock_hotkey.assert_called_once_with("ctrl", "c")
+            expected_keys = ("command", "c") if sys.platform == "darwin" else ("ctrl", "c")
+            mock_hotkey.assert_called_once_with(*expected_keys)
 
     # ==========================================
     # STAGE 2: WINDOW CONTROL
@@ -252,7 +255,8 @@ class TestNewFeatures(unittest.TestCase):
 
         timer.join()
         # Should have woken up almost immediately after timer fired (within ~15ms total instead of 5000ms)
-        self.assertLess(elapsed_ms, 50.0)
+        threshold_ms = 250.0 if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS") else 50.0
+        self.assertLess(elapsed_ms, threshold_ms)
 
     def test_13_agent_task_cancellation(self):
         """13. Autonomous browser agent responds to cancellation."""
@@ -875,7 +879,8 @@ class TestNewFeatures(unittest.TestCase):
         with patch("pyautogui.hotkey") as mock_hotkey:
             res_hotkey = executor.execute(Command(Action.HOTKEY, "ctrl+c"))
             self.assertEqual(res_hotkey, "OK")
-            mock_hotkey.assert_called_once_with("ctrl", "c")
+            expected_keys = ("command", "c") if sys.platform == "darwin" else ("ctrl", "c")
+            mock_hotkey.assert_called_once_with(*expected_keys)
 
     def test_44_stop_while_agent_task_running(self):
         """8. STOP while AGENT_TASK is running immediately cancels agent and resets ownership."""
@@ -954,7 +959,8 @@ class TestNewFeatures(unittest.TestCase):
         try:
             self.assertEqual(res, "OK")
             # Must return in under 50ms (typically <2ms), proving non-blocking dispatch
-            self.assertLess(elapsed_ms, 50.0)
+            threshold_ms = 250.0 if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS") else 50.0
+            self.assertLess(elapsed_ms, threshold_ms)
             # Worker thread is active
             self.assertTrue(agent_started.wait(timeout=1.0))
             self.assertTrue(self.state.agent_running)

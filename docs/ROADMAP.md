@@ -37,6 +37,15 @@
 - [x] Windows window state controls (minimize, maximize, restore, switch) and media playback keys.
 - [x] Comprehensive test suite expansion to 127 discovered tests (123 passed, 4 opt-in skipped).
 
+### Cross-Platform Architecture & macOS Support (Phase 4)
+- [x] Abstract `PlatformController` interface separating OS primitives from high-level desktop and process orchestration.
+- [x] Extensible `VoiceInputProvider` architecture (`voice/base.py`, `voice/handy_provider.py`, `voice/unavailable_provider.py`, `voice/factory.py`) with graceful fallback when voice input is unconfigured.
+- [x] Native `WindowsPlatformController` preserving 100% of existing Win32, ctypes, and PowerShell behavior.
+- [x] Native `MacOSPlatformController` supporting application launching (`open -a`), AppleScript window management (`osascript`), POSIX process management, and platform modifier mappings (`ctrl` $\to$ `cmd`).
+- [x] Cross-platform configuration with platform-aware browser and database path resolution.
+- [x] GitHub Actions CI matrix running automated test discovery on both `windows-latest` and `macos-latest`.
+- [x] Expanded automated test discovery suite to 145 tests (137 passed, 8 opt-in skipped, 0 failures, 0 errors).
+
 ---
 
 ## 2. Current Hardening Focus

@@ -1,4 +1,5 @@
 import os
+import sys
 import unittest
 
 import pyperclip
@@ -10,8 +11,8 @@ from voice.handy import Handy
 
 
 @unittest.skipUnless(
-    os.environ.get("LIGHT_RUN_WINDOWS_SMOKE") == "1",
-    "Opt-in Windows smoke tests are disabled by default. Set LIGHT_RUN_WINDOWS_SMOKE=1 to run.",
+    sys.platform == "win32" and os.environ.get("LIGHT_RUN_WINDOWS_SMOKE") == "1",
+    "Opt-in Windows smoke tests are disabled by default. Set LIGHT_RUN_WINDOWS_SMOKE=1 on Windows to run.",
 )
 class TestWindowsSmoke(unittest.TestCase):
     """
