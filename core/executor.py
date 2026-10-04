@@ -16,12 +16,12 @@ from utils.logger import log_executor
 
 class Executor:
 
-    def __init__(self, state: LightState | None = None):
+    def __init__(self, state: LightState | None = None, ai_provider=None):
         self.apps = AppController()
         self.keyboard = KeyboardController()
         self.mouse = MouseController()
         self.browser = BrowserController()
-        self.browser_agent = AutonomousBrowserAgent()
+        self.browser_agent = AutonomousBrowserAgent(ai_provider=ai_provider)
         self.screen = ScreenController()
         self.state = state if state is not None else LightState()
         self.last_verification_ms: float = 0.0
