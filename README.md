@@ -5,13 +5,13 @@
 
 LIGHT is a local-first assistant that turns continuous speech transcriptions
 into desktop and browser actions. Frequent commands take a deterministic path;
-complex requests can use local Qwen3 1.7B through Ollama; open-ended web goals
-can use an isolated Browser Use agent. No cloud LLM or subscription API key is
-required.
+complex requests can use a user-selected AI provider/model; open-ended web
+goals can use an isolated Browser Use agent. The default remains local Qwen3
+1.7B through Ollama. Cloud providers are explicit opt-ins, never requirements.
 
 ```text
-Handy/local transcript -> listener -> priority queue -> deterministic brain
-                                      |              -> local Ollama planner
+selected transcript source -> listener -> priority queue -> deterministic brain
+                                             |              -> selected AI planner
                                       v
                                   executor -> desktop / Playwright / agent
                                            -> verification -> state
@@ -19,10 +19,11 @@ Handy/local transcript -> listener -> priority queue -> deterministic brain
 
 ## What is in `v0.5.0`
 
-- continuous, read-only Handy SQLite transcript ingestion with an unavailable
-  provider fallback;
+- continuous transcript ingestion from local Handy or an explicit custom
+  transcript-feed API, with an unavailable-provider mode;
 - deterministic commands, compound plans, guarded Laya fallback, and optional
-  local Ollama planning;
+  provider-neutral planning with Ollama, LM Studio, OpenAI, Claude, Gemini, or
+  a custom OpenAI-compatible endpoint;
 - application, keyboard, mouse, window, media, and screen controls through a
   Windows/macOS platform boundary;
 - deterministic Playwright navigation, visible-element selection, named-result
@@ -39,7 +40,7 @@ default; it does not mean web requests are offline.
 
 | Area | Windows | macOS |
 | --- | --- | --- |
-| Parser, queue, state, local Ollama | Automated tests and CI | Automated tests and CI |
+| Parser, queue, state, provider adapters | Automated tests and CI | Automated tests and CI |
 | Deterministic browser | CI plus local Playwright integration | CI plus local Playwright integration |
 | Desktop platform layer | Unit tests; opt-in host smoke available | Mocked unit tests; opt-in host smoke available |
 | Handy voice ingestion | Implemented; requires local Handy database | Path/fallback implemented; Handy and physical voice flow not verified |
@@ -52,7 +53,8 @@ specific Mac.
 ## Install
 
 Requirements: Python 3.10+ (CI uses 3.12), a supported Chromium browser, and
-optionally Handy for voice and Ollama for local planning/agent work.
+optionally Handy for voice and Ollama or LM Studio for local planning/agent
+work. Cloud AI providers are optional and require user-supplied credentials.
 
 Windows PowerShell:
 
@@ -80,7 +82,58 @@ conflict: `browser-use==0.13.10` requires `click==8.3.3`, while the installed
 CI environment installs successfully, but `pip check` is not clean. Do not
 silently resolve this by upgrading packages without compatibility testing.
 
-### Local configuration
+### Provider and model configuration
+
+Provider and model are independent settings. Inspect the active selections
+without contacting them:
+
+```powershell
+.\lightenv\Scripts\python.exe -m providers show
+```
+
+Validate both active providers, or discover models from the active AI endpoint:
+
+```powershell
+.\lightenv\Scripts\python.exe -m providers status
+.\lightenv\Scripts\python.exe -m providers models
+```
+
+Switch the AI model independently of STT. Changes are validated before the
+user-owned `.light/providers.json` file is replaced:
+
+```powershell
+# Local Ollama
+.\lightenv\Scripts\python.exe -m providers set-ai --provider local --runtime ollama --model qwen3:1.7b
+
+# Local LM Studio (OpenAI-compatible server)
+.\lightenv\Scripts\python.exe -m providers set-ai --provider local --runtime lm_studio --model your-loaded-model
+
+# OpenAI; set the secret in the environment, never in providers.json
+$env:OPENAI_API_KEY="..."
+.\lightenv\Scripts\python.exe -m providers set-ai --provider openai --model your-model --credential-env OPENAI_API_KEY
+```
+
+AI choices are `local` (runtime `ollama` or `lm_studio`), `gemini`, `openai`,
+`claude`, and `custom_api`. For a custom OpenAI-compatible endpoint, pass
+`--base-url` and optionally `--credential-env`.
+
+STT choices are `local` and `custom_api`. The supported local runtime is Handy:
+
+```powershell
+.\lightenv\Scripts\python.exe -m providers set-stt --provider local --runtime handy --db-path C:\path\to\history.db
+```
+
+The custom option is a transcript-event feed, not an audio-upload API; its
+contract is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). LIGHT
+does not yet own microphone capture, VAD, or direct Whisper inference, so those
+capabilities are not claimed.
+
+The provider file is ignored by Git. Credential values are never written to
+it: only an environment-variable name such as `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` is stored. Current credential storage
+uses environment variables; OS keychain integration remains future work.
+
+### Environment overrides
 
 Create an untracked `.env` only when overriding defaults. Supported settings
 include `HANDY_DB_PATH`, `LAYA_MODEL`, `LLM_ENABLED`, `LLM_PROVIDER`,
@@ -89,6 +142,8 @@ include `HANDY_DB_PATH`, `LAYA_MODEL`, `LLM_ENABLED`, `LLM_PROVIDER`,
 `BROWSER_TYPE_GUARD_MS`, `LIGHT_CDP_PORT`, and
 `PLAYWRIGHT_BROWSERS_PATH`. Browser Use defaults to repository-local
 `.light_browseruse/` storage with optional telemetry and cloud sync disabled.
+The legacy `LLM_*` values remain compatible defaults when no provider file is
+present. `LIGHT_PROVIDER_CONFIG` can point to a different provider JSON file.
 
 Start Ollama when LLM planning or agent work is desired:
 
@@ -116,7 +171,7 @@ cooperatively cancellable.
 
 ```powershell
 .\lightenv\Scripts\python.exe -m unittest discover -s tests -v
-.\lightenv\Scripts\python.exe -m compileall -q main.py config.py voice brain computer browser core utils tests
+.\lightenv\Scripts\python.exe -m compileall -q main.py config.py providers voice brain computer browser core utils tests
 ```
 
 The tagged `v0.5.0` CI baseline discovers 155 tests: 147 pass and 8 opt-in host

@@ -544,3 +544,56 @@ Browser copy paths raise on failed clipboard verification. Desktop copy/paste ro
 - `tests/test_browser.py::TestBrowserAndContextFlow::test_copy_selected_text_requires_verified_clipboard_write`
 - `tests/test_computer.py::TestComputerControl::test_executor_routes_clipboard_shortcuts_through_platform_keyboard`
 - `tests/test_new_features.py::TestNewFeatures::test_44b_stop_clears_stale_browser_state`
+
+---
+
+## Issue 21 — AI Provider and Model Hardcoded to Ollama/Qwen
+
+### Problem
+The planner accepted provider/model constructor strings but always called the
+Ollama `/api/chat` protocol. The autonomous browser agent separately hardcoded
+`ChatOllama`. Changing configuration therefore did not produce a real provider
+switch, and planning and agent tasks could disagree.
+
+### Root Cause
+Transport, provider selection, model selection, and planner action validation
+were combined inside `QwenPlanner`, while Browser Use constructed its own LLM
+independently.
+
+### Fix
+Typed provider/model configuration and an explicit AI adapter registry now own
+transport and model discovery. The backward-compatible planner delegates to the
+selected adapter, and Browser Use reuses that same selection. Every adapter
+returns through the existing action validation. Configuration activation is
+explicit; an unavailable provider never causes silent provider/model fallback.
+
+The audit also confirmed that `VoiceInputProvider` starts at completed
+transcript events. Handy remains the supported local runtime, and custom STT is
+a documented transcript feed. Direct Whisper was not fabricated without an
+audio capture/VAD contract.
+
+### Regression Tests
+- `tests/test_provider_architecture.py`
+- `tests/test_queue_and_llm.py::TestProducerConsumerQueueAndLLM::test_04_phase9_all_22_fast_path_commands_have_zero_llm_calls`
+- `tests/test_new_features.py::TestNewFeatures::test_16_agent_task_initialization_logs_and_ollama`
+
+---
+
+## Issue 22 — Inaccessible Handy Path Crashed Provider Discovery
+
+### Problem
+An existing but inaccessible Handy database path could raise `PermissionError`
+during `Path.exists()`, crashing startup/status before LIGHT could enter its
+documented unavailable-provider mode.
+
+### Root Cause
+The existence check occurred immediately before the factory's guarded Handy
+constructor block.
+
+### Fix
+The factory now handles `OSError` around the path probe, logs the access
+diagnostic, and returns `UnavailableVoiceProvider`. It does not try a different
+STT provider.
+
+### Regression Test
+- `tests/test_voice_provider.py::TestVoiceProviders::test_factory_returns_unavailable_when_handy_path_is_inaccessible`

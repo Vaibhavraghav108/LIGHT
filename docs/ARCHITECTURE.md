@@ -1,12 +1,13 @@
 # LIGHT Architecture
 
-This is the canonical runtime architecture for `v0.5.0`. Paths and names refer
-to the tagged source at commit `8524bde`.
+This is the canonical runtime architecture. The `v0.5.0` release baseline is
+commit `8524bde`; the provider/model milestone described below is implemented
+on its feature branch and retains that runtime pipeline.
 
 ## Runtime map
 
 ```text
-external STT/VAD (Handy)
+selected STT transcript source (Handy or custom feed)
         |
         v
 VoiceInputProvider -- read-only transcripts --> LIGHT-VoiceListener thread
@@ -23,7 +24,7 @@ VoiceInputProvider -- read-only transcripts --> LIGHT-VoiceListener thread
                                       Laya / decision orchestration
                           +------------------------+--------------------+
                           |                        |                    |
-                  deterministic parser      Qwen/Ollama planner   guarded Laya
+                  deterministic parser      selected AI provider  guarded Laya
                           +------------------------+--------------------+
                                                    |
                                         validated List[Command]
@@ -56,10 +57,28 @@ That is a known limitation, not a guarantee of immediate process termination.
 
 ## Voice and queue flow
 
-`get_voice_provider()` returns `HandyVoiceProvider` when the configured database
-exists, otherwise `UnavailableVoiceProvider`. Handy queries are read-only and
-ordered by monotonically increasing IDs. Provider read errors are handled by
-the listener without moving the last successful ID.
+`get_voice_provider()` constructs exactly the selected `VoiceInputProvider`.
+The default local runtime is `HandyVoiceProvider`; a missing Handy database
+produces `UnavailableVoiceProvider`. `CustomAPITranscriptProvider` polls a
+user-owned transcript-feed API. A failed custom API is not silently replaced by
+Handy. Handy queries are read-only and ordered by monotonically increasing IDs.
+Provider read errors are handled by the listener without moving the last
+successful ID.
+
+The custom transcript-feed contract is:
+
+- `GET {base_url}/v1/transcriptions/latest` returns either an empty object,
+  `{"id": 7, "text": "..."}`, or
+  `{"transcription": {"id": 7, "text": "..."}}`;
+- `GET {base_url}/v1/transcriptions?after_id=7` returns
+  `{"transcriptions": [{"id": 8, "text": "..."}]}`;
+- IDs are integer, monotonic event IDs; returned batches are sorted before
+  ingestion;
+- an optional bearer credential is resolved from the configured environment
+  variable name.
+
+This is a transcript-event boundary, not an audio API. LIGHT still does not own
+microphone capture, VAD, chunking, or direct Whisper inference.
 
 `LightLoop.ingest_text()` performs explicit STOP detection before brain
 planning. STOP sets `CommandQueue.cancel_event`, clears queued normal work, and
@@ -76,12 +95,15 @@ does not cover speech recognition, Handy publication, or the polling interval.
 
 1. deterministic multi-command parser;
 2. deterministic single-command parser;
-3. optional local Qwen planner;
+3. optional selected AI provider/model planner;
 4. deterministic complex-search fallback;
 5. guarded Laya classification.
 
-The Qwen planner uses HTTP only to the configured Ollama endpoint (localhost by
-default), accepts JSON, and validates actions against the `Action` enum.
+The backward-compatible `QwenPlanner` orchestration class delegates transport
+to an `AIProvider`. Registered choices are local Ollama, local LM Studio,
+OpenAI, Claude, Gemini, and a custom OpenAI-compatible endpoint. Ollama remains
+the default. Every provider returns content to the same JSON cleanup and action
+validation path; changing provider cannot expand the action vocabulary.
 Applications are allowlisted, URLs are normalized/validated, STOP requires an
 explicit user phrase, and no shell action exists. This reduces—but does not
 eliminate—the risk of harmful text targets or browser content. Executor and
@@ -129,16 +151,52 @@ single-instance enforcement.
 Linux is not supported. The factory's fallback is compatibility behavior, not
 a Linux platform implementation.
 
+## Provider and model architecture
+
+`providers/configuration.py` owns typed `STTConfig`, `AIConfig`, and
+`ProviderSettings`. Provider, runtime, and model are distinct fields. The
+explicit registries do not inspect installed applications and do not auto-pick
+a provider. The default user file is `.light/providers.json`, ignored by Git;
+`LIGHT_PROVIDER_CONFIG` can redirect it.
+
+`python -m providers` provides four operational surfaces:
+
+- `show` displays selected STT/AI provider, runtime, model, endpoint, and the
+  credential environment-variable name without reading its value;
+- `status` contacts the selected endpoints and reports availability;
+- `models` discovers models from Ollama `/api/tags` or provider model APIs;
+- `set-ai` / `set-stt` validate the candidate before atomically replacing the
+  configuration file. A failed candidate remains inactive.
+
+AI planning uses standard-library HTTP, so switching providers does not add a
+mandatory SDK. Browser Use is already optional and supplies lazy native
+wrappers for Ollama, OpenAI-compatible services, OpenAI, Anthropic, and Google.
+At startup `main.py` builds one selected AI provider and injects it into both
+the planner and autonomous agent so one run cannot observe two configurations.
+There is no automatic fallback to another provider/model.
+
+Credentials are resolved from environment variables and are never persisted as
+values. Provider exceptions are converted to messages that omit request URLs,
+headers, response bodies, and third-party SDK details. OS keychain integration
+is not implemented in this milestone.
+
 ## Configuration and external dependencies
 
 - Handy is an external local STT/VAD application and SQLite producer.
-- Ollama is optional for Qwen planning and required for Browser Use tasks.
+- Ollama and LM Studio are optional local AI runtimes. Ollama/Qwen3 is the
+  default; neither is mandatory when AI planning is disabled or another
+  provider is explicitly selected.
+- OpenAI, Claude, Gemini, and custom APIs are opt-in and change LIGHT's privacy
+  boundary by sending prompts—and for Browser Use, observed web context—to the
+  configured service.
 - Playwright Chromium is required for deterministic browser automation.
 - Browser Use is optional and lazily imported.
 - Laya is loaded for the final classifier path.
 - PyAutoGUI/Pyperclip drive physical input and clipboard behavior.
 
-Configuration is read from environment variables and optional untracked
+Provider selection is read from `.light/providers.json`, with legacy `LLM_*`
+and `HANDY_DB_PATH` environment defaults retained for compatibility. General
+configuration is read from environment variables and optional untracked
 `.env`. Browser Use configuration defaults to `.light_browseruse/`, with its
 optional telemetry and cloud sync disabled unless a user explicitly overrides
 them.

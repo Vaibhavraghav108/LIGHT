@@ -9,7 +9,7 @@ in [ARCHITECTURE.md](ARCHITECTURE.md), and safety boundaries in
 
 LIGHT is a local-first, continuously listening desktop and browser automation
 assistant for Windows and macOS. It optimizes common actions for low latency,
-uses local model inference only when useful, verifies high-risk physical and
+uses an explicitly selected AI model only when useful, verifies high-risk physical and
 browser actions, and keeps interruption authority with the user.
 
 Target users include people who need hands-free navigation, developers and
@@ -24,22 +24,28 @@ judgment.
 
 - Consume ordered transcription events through `VoiceInputProvider` without
   coupling the core loop to one STT implementation.
+- Select local Handy or a custom transcript-feed API independently from the AI
+  provider and model.
 - Poll continuously on a listener thread while actions execute elsewhere.
 - Suppress rapid duplicate non-repeatable transcripts while preserving intended
   repeatable commands.
 - Remain operational with voice ingestion idle when no provider is available.
 - Never write to the Handy SQLite database.
 
-Handy supplies STT and VAD outside LIGHT. Direct microphone capture, VAD, and
-Whisper are not implemented in this release.
+Handy or a user-controlled service supplies STT/VAD outside LIGHT. Direct
+microphone capture, VAD, and Whisper are not implemented in this release.
 
 ### Decision engine
 
 - Route common commands through deterministic parsing without model calls.
 - Support compound commands and contextual continuations without prematurely
   mutating live state.
-- Use local Qwen3 1.7B through Ollama only for command-like requests that need
-  structured planning.
+- Use the explicitly selected AI provider/model only for command-like requests
+  that need structured planning. Local Ollama/Qwen3 remains the default.
+- Support local Ollama and LM Studio plus opt-in OpenAI, Claude, Gemini, and
+  custom OpenAI-compatible services without changing the action vocabulary.
+- Never auto-select an installed provider, silently substitute a model, or
+  persist credential values in repository configuration.
 - Normalize and validate every model-generated action before execution.
 - Use Laya only as a guarded final classifier fallback.
 - Ignore casual or malformed speech rather than inventing an action.
@@ -68,7 +74,7 @@ Whisper are not implemented in this release.
 - Reserve `AGENT_TASK` for open-ended research and multi-step web goals.
 - Run at most one agent task on `LIGHT-AgentWorker` without blocking ordinary
   commands.
-- Use an isolated Browser Use session and local Ollama model.
+- Use an isolated Browser Use session and the explicitly selected AI provider.
 - Expose cancellation and bounded cleanup while acknowledging that third-party
   internals may not terminate instantly.
 

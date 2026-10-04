@@ -18,7 +18,9 @@ verification boundaries.
 | Normal close is scoped | only LIGHT-tracked processes are terminated | explicit `force=True` can be broad and must not be normal routing |
 | OS/provider details stay behind interfaces | `PlatformController`; `VoiceInputProvider` | generic subprocess execution may run commands returned by the platform |
 | LLM output is untrusted | structured JSON, action allowlist, app/URL/STOP validation | permitted text/click targets still need executor/browser checks |
-| Local-first defaults remain | local STT database/model; Browser Use telemetry/cloud sync off by default | web tasks necessarily send requests/content to requested sites |
+| Local-first defaults remain | local Handy + Ollama defaults; Browser Use telemetry/cloud sync off by default | opting into cloud AI sends prompts and potentially browser context to that service |
+| Provider selection is explicit | typed allowlisted registries; candidate validation before CLI activation | endpoint availability can change after validation |
+| Credentials are not persisted/logged | configuration stores environment-variable names; sanitized HTTP/SDK failures | process environments remain visible to suitably privileged local software |
 | Tests may not be weakened | regressions require tests and CI matrix preservation | mocked/CI tests are not physical-host certification |
 
 ## STOP and cancellation
@@ -51,7 +53,7 @@ fast cancellation signaling, queue preemption, and cooperative cleanup.
 ## Browser and webpage safety
 
 Browser page text is untrusted. Deterministic commands do not turn page content
-into new desktop actions. Qwen planning is based on the user's request and
+into new desktop actions. AI planning is based on the user's request and
 validated against a fixed action vocabulary; Browser Use may observe webpage
 content inside its isolated session, but it has no LIGHT shell action.
 
@@ -68,7 +70,7 @@ unknown URLs and webpage-driven autonomous goals as potentially hostile.
 
 ## LLM safety boundary
 
-The Ollama planner cannot emit actions outside `Action`; there is no shell,
+No AI provider can emit actions outside `Action`; there is no shell,
 filesystem, package-install, credential, or arbitrary-process action. STOP is
 accepted only when the raw user text is explicit. Known applications are
 allowlisted and URL-like targets are validated.
@@ -94,10 +96,15 @@ rules, and user STOP authority remain required.
 
 ## Privacy and data handling
 
-- Handy audio processing and database publication occur in the external Handy
-  application; LIGHT reads transcript text only.
-- Qwen/Laya inference is local by default. Ollama's endpoint is configurable,
-  so a non-local override changes that privacy boundary.
+- Handy/custom-service audio processing and transcript publication occur
+  outside LIGHT; LIGHT reads transcript text only.
+- Laya and Ollama/Qwen inference are local by default. Selecting OpenAI,
+  Claude, Gemini, a remote custom API, or a non-local endpoint changes that
+  privacy boundary. Planner requests include the spoken request and compact
+  app/site state; Browser Use can also transmit observed webpage context.
+- Provider configuration stores only a credential environment-variable name.
+  HTTP and Browser Use initialization failures must not echo credential values,
+  request headers, secret-bearing URLs, or response bodies.
 - Browser Use configuration is repository-local by default, with optional
   telemetry and cloud sync disabled unless the environment overrides them.
 - Runtime logs can contain spoken commands, URLs, errors, and timings. They are

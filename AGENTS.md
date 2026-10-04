@@ -19,7 +19,8 @@ The responsibilities are deliberately separate:
 
 - deterministic parsing handles common commands without an LLM;
 - Laya is the guarded final intent-classification fallback;
-- Qwen3 1.7B through local Ollama plans complex structured commands;
+- a selected `AIProvider` plans complex structured commands; local
+  Ollama/Qwen3 remains the default;
 - Playwright owns deterministic browser actions;
 - Browser Use handles open-ended autonomous web goals in an isolated session;
 - `PlatformController` contains operating-system primitives;
@@ -49,6 +50,8 @@ The responsibilities are deliberately separate:
     force close requires explicit API opt-in and must never be normal routing.
 13. Desktop OS operations belong behind `PlatformController`.
 14. Voice-provider behavior belongs behind `VoiceInputProvider`.
+    AI transport/model behavior belongs behind `AIProvider`; provider selection
+    must never bypass action validation or introduce silent model fallback.
 15. Keep local-first defaults: no mandatory cloud API, telemetry, analytics, or
     tracking. Web automation still communicates with sites the user requests.
 16. Do not delete, skip, weaken, or rewrite tests merely to make CI green.
@@ -80,7 +83,7 @@ Run targeted tests first, then the complete checks appropriate to the change:
 
 ```powershell
 .\lightenv\Scripts\python.exe -m unittest discover -s tests -v
-.\lightenv\Scripts\python.exe -m compileall -q main.py config.py voice brain computer browser core utils tests
+.\lightenv\Scripts\python.exe -m compileall -q main.py config.py providers voice brain computer browser core utils tests
 git diff --check
 git status --short --branch
 ```
