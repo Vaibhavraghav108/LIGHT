@@ -1,6 +1,7 @@
 import asyncio
+import os
 import threading
-from config import LLM_BASE_URL, LLM_MODEL, LLM_TIMEOUT
+from config import BROWSER_USE_CONFIG_DIR, LLM_BASE_URL, LLM_MODEL, LLM_TIMEOUT
 from utils.logger import log_browser, log_debug, log_info, log_warning
 
 
@@ -13,6 +14,12 @@ class AutonomousBrowserAgent:
     """
 
     def __init__(self):
+        # browser-use defaults optional telemetry/cloud sync to enabled and
+        # otherwise writes under the user's global config directory. Reassert
+        # LIGHT's private, workspace-local defaults before its lazy import.
+        os.environ.setdefault("BROWSER_USE_CONFIG_DIR", str(BROWSER_USE_CONFIG_DIR))
+        os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
+        os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
         self._running = False
         self._lock = threading.Lock()
         self._current_agent = None

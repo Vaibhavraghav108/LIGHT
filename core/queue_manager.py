@@ -151,7 +151,7 @@ class CommandQueue:
             remaining = collections.deque()
             for req in self._deque:
                 same_plan = (failed_text is None) or (req.text == failed_text)
-                if req.command.action in dependent_actions and (same_plan or cancelled == 0):
+                if req.command.action in dependent_actions and same_plan:
                     req.status = CommandStatus.CANCELLED
                     req.error = f"Skipped because prerequisite {failed_action.name} failed"
                     req.execution_completed_at = time.perf_counter()

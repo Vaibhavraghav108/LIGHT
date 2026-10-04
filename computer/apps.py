@@ -100,6 +100,7 @@ class AppController:
         # 1. Close any processes directly tracked/started by LIGHT
         closed_count = 0
         tracked = self._launched_processes.get(key, [])
+        had_tracked_launch = bool(tracked)
         remaining = []
         for proc in tracked:
             try:
@@ -129,12 +130,22 @@ class AppController:
                 )
             return closed_count
 
-        # 3. For standard desktop utilities (Notepad, Calculator)
-        for cmd in self.platform.get_app_close_commands(key, force=True):
-            subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-            )
+        # 3. Standard desktop utilities are also scoped to LIGHT launches.
+        # On macOS, `open -a` is only a short-lived launcher, so a tracked launch
+        # may require a graceful AppleScript quit after the launcher exits.
+        if force:
+            close_commands = self.platform.get_app_close_commands(key, force=True)
+        elif had_tracked_launch and self.platform.platform_name == "macos":
+            close_commands = self.platform.get_app_close_commands(key, force=False)
+        else:
+            close_commands = []
+
+        for cmd in close_commands:
+            subprocess.run(cmd, capture_output=True, text=True)
             closed_count += 1
+
+        if not had_tracked_launch and not force:
+            log_warning(
+                f"No LIGHT-started {key.title()} process to close; refusing an image-wide force kill."
+            )
         return closed_count

@@ -1838,6 +1838,7 @@ class BrowserController:
         index: int | str = 1,
         mouse_controller=None,
         search_context: str | None = None,
+        cancel_event=None,
     ):
         if self.page is not None:
             current_url = str(getattr(self.page, "url", "") or "").strip().lower()
@@ -1877,7 +1878,12 @@ class BrowserController:
         # Semantic verification for named targets
         is_named = not (target_str.isdigit() or target_str.lower() in RESULT_ORDINAL_MAP or target_str.lower().startswith("result "))
         if is_named:
-            self.verify_destination(expected_target=target_str, expected_query=effective_context, pre_url=pre_url)
+            self.verify_destination(
+                expected_target=target_str,
+                expected_query=effective_context,
+                pre_url=pre_url,
+                cancel_event=cancel_event,
+            )
 
         return info
 
@@ -1886,6 +1892,8 @@ class BrowserController:
         expected_target: str,
         expected_query: str | None = None,
         pre_url: str | None = None,
+        cancel_event=None,
+        navigation_timeout: float = 3.0,
     ):
         """
         Semantic verification: After clicking a named target, verify that the resulting
@@ -1893,14 +1901,18 @@ class BrowserController:
         Raises RuntimeError if verification fails.
         """
         if not self.is_active() or not self.page:
-            return
+            raise RuntimeError("Semantic verification failed: browser became inactive after click.")
 
         t0 = time.perf_counter()
-        while time.perf_counter() - t0 < 3.0:
+        while time.perf_counter() - t0 < navigation_timeout:
             curr = (self.get_current_url() or "").strip()
             if pre_url and curr and curr != pre_url and curr.lower() != "about:blank":
                 break
-            time.sleep(0.1)
+            if cancel_event is not None:
+                if cancel_event.wait(timeout=0.01):
+                    raise RuntimeError("Semantic verification cancelled by STOP/Cancel.")
+            else:
+                time.sleep(0.05)
 
         curr_url = (self.get_current_url() or "").lower()
         curr_title = (self.get_title() or "").lower()
@@ -1914,6 +1926,11 @@ class BrowserController:
         is_site = any(w in target_lower for w in ("website", "site", "official", "page"))
 
         log_browser(f"[VERIFY] Destination: url='{curr_url}' title='{curr_title}' for target='{expected_target}' query='{expected_query}'")
+
+        if pre_url and curr_url == pre_url.strip().lower():
+            raise RuntimeError(
+                f"Semantic verification failed: click did not navigate away from '{pre_url}'."
+            )
 
         if is_repo:
             valid_host = any(h in curr_url for h in ("github.com", "gitlab.com"))
@@ -2150,7 +2167,8 @@ class BrowserController:
             selected = self.page.evaluate("() => window.getSelection().toString()")
             if not selected or not selected.strip():
                 raise ValueError("No text is currently selected on the page.")
-            self._write_and_verify_clipboard(selected)
+            if not self._write_and_verify_clipboard(selected):
+                raise RuntimeError("Clipboard verification failed after copying selected text.")
             log_browser(f"Copied selected text ({len(selected)} chars) to clipboard.")
             return selected
 
@@ -2270,7 +2288,8 @@ class BrowserController:
             raise ValueError(reason)
 
         copied_text = extracted["text"]
-        self._write_and_verify_clipboard(copied_text)
+        if not self._write_and_verify_clipboard(copied_text):
+            raise RuntimeError("Clipboard verification failed after copying page text.")
         preview = copied_text[:120] + ("..." if len(copied_text) > 120 else "")
         log_browser(f"Copied to clipboard ({len(copied_text)} chars): \"{preview}\"")
         return copied_text

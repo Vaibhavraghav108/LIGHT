@@ -7,6 +7,8 @@ from browser.browser import BrowserController
 from computer.apps import AppController
 from computer.keyboard import KeyboardController
 from computer.mouse import MouseController
+from computer.platform_macos import MacOSPlatformController
+from computer.platform_windows import WindowsPlatformController
 from core.executor import Executor
 
 
@@ -26,13 +28,52 @@ class TestComputerControl(unittest.TestCase):
     @patch("computer.apps.subprocess.run")
     def test_close_apps(self, mock_run):
         apps = AppController()
-        apps.close("Notepad")
+        closed = apps.close("Notepad")
+        self.assertEqual(closed, 0)
+        mock_run.assert_not_called()
+
+        closed = apps.close("Notepad", force=True)
+        self.assertEqual(closed, 1)
         expected_cmd = ["pkill", "-f", "TextEdit"] if sys.platform == "darwin" else ["taskkill", "/IM", "notepad.exe", "/F"]
         mock_run.assert_called_with(
             expected_cmd,
             capture_output=True,
             text=True,
         )
+
+    @patch("computer.apps.subprocess.run")
+    @patch("computer.apps.subprocess.Popen")
+    def test_close_notepad_only_terminates_light_tracked_process(self, mock_popen, mock_run):
+        cases = [
+            (WindowsPlatformController(), 1, None),
+            (
+                MacOSPlatformController(),
+                2,
+                ["osascript", "-e", 'tell application "TextEdit" to quit'],
+            ),
+        ]
+        for platform, expected_closed, graceful_command in cases:
+            with self.subTest(platform=platform.platform_name):
+                mock_proc = MagicMock()
+                mock_proc.poll.return_value = None
+                mock_popen.return_value = mock_proc
+                apps = AppController(platform=platform)
+                apps.open("Notepad", wait_and_focus=False)
+
+                closed = apps.close("Notepad")
+
+                self.assertEqual(closed, expected_closed)
+                mock_proc.terminate.assert_called_once_with()
+                if graceful_command:
+                    mock_run.assert_called_once_with(
+                        graceful_command,
+                        capture_output=True,
+                        text=True,
+                    )
+                else:
+                    mock_run.assert_not_called()
+                mock_popen.reset_mock()
+                mock_run.reset_mock()
 
     @patch("computer.apps.subprocess.run")
     @patch("computer.apps.subprocess.Popen")
@@ -194,6 +235,20 @@ class TestComputerControl(unittest.TestCase):
         executor.browser.move_mouse_to_element.assert_called_once_with(
             "the search bar",
             executor.mouse,
+        )
+
+    def test_executor_routes_clipboard_shortcuts_through_platform_keyboard(self):
+        executor = Executor()
+        executor.browser = MagicMock()
+        executor.browser.is_active.return_value = False
+        executor.keyboard = MagicMock()
+
+        self.assertEqual(executor.execute(Command(Action.COPY_TEXT, None)), "OK")
+        self.assertEqual(executor.execute(Command(Action.PASTE, None)), "OK")
+
+        self.assertEqual(
+            executor.keyboard.hotkey.call_args_list,
+            [unittest.mock.call("ctrl", "c"), unittest.mock.call("ctrl", "v")],
         )
 
 

@@ -42,12 +42,12 @@ class WindowsPlatformController(PlatformController):
         if app_key == "chrome":
             return [["taskkill", "/IM", "chrome.exe", "/F"]] if force else []
         if app_key == "notepad":
-            return [["taskkill", "/IM", "notepad.exe", "/F"]]
+            return [["taskkill", "/IM", "notepad.exe", "/F"]] if force else []
         if app_key == "calculator":
             return [
                 ["taskkill", "/IM", "CalculatorApp.exe", "/F"],
                 ["taskkill", "/IM", "calc.exe", "/F"],
-            ]
+            ] if force else []
         return []
 
     def get_browser_candidate_paths(self, browser_name: str) -> list[Path]:

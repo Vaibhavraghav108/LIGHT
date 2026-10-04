@@ -74,7 +74,7 @@
 
 ### 3.8 Absolute Interruption Authority (Emergency STOP)
 - When a user utters an emergency phrase (`"Stop"`, `"Cancel"`, `"Quit"`, `"Exit"`, `"Abort"`), the system must:
-  - Detect the intent within **<5ms**.
+  - Detect the intent and set cancellation within **<5ms after the transcription reaches command ingestion**; provider polling and STT publication are separate latency components.
   - Immediately abort in-flight commands, waiting loops, or autonomous agent steps.
   - Cancel any queued dependent actions.
   - Reset browser ownership and state cleanly.

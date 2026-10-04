@@ -1,6 +1,6 @@
 # LIGHT — Comprehensive Testing Guide
 
-> **Test Suite Baseline**: Running the automated test discovery command discovers **145 tests**: **137 execute and pass**, **0 fail**, **0 errors**, and **8 opt-in host smoke tests skip by default (`OK (skipped=8)`)**.
+> **Test Suite Baseline**: Running the automated test discovery command discovers **155 tests**: **147 execute and pass**, **0 fail**, **0 errors**, and **8 opt-in host smoke tests skip by default (`OK (skipped=8)`)**.
 
 ---
 
@@ -10,15 +10,15 @@ LIGHT employs a multi-tiered test suite to guarantee safety, deterministic accur
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
-│                   LIGHT MULTI-TIER TEST SUITE (145 TESTS)              │
+│                   LIGHT MULTI-TIER TEST SUITE (155 TESTS)              │
 ├────────────────────────────────┬───────────────────────────────────────┤
-│ Tier 1: Deterministic Unit     │ 56 Tests across voice providers, brain│
+│ Tier 1: Deterministic Unit     │ 59 Tests across voice providers, brain│
 │ (Isolated Mocks, <1ms parsing) │ desktop apps, screen, and macOS mocks.│
 ├────────────────────────────────┼───────────────────────────────────────┤
 │ Tier 2: Real Local Browser     │ 5 Headless Playwright integration     │
 │ (ThreadingHTTPServer + DOM)    │ tests against local HTML fixtures.    │
 ├────────────────────────────────┼───────────────────────────────────────┤
-│ Tier 3: Queue, LLM Planning,   │ 76 Tests covering queue, Qwen planner,│
+│ Tier 3: Queue, LLM Planning,   │ 83 Tests covering queue, Qwen planner,│
 │ Reliability & Advanced Features│ background agent worker, and ranking. │
 ├────────────────────────────────┼───────────────────────────────────────┤
 │ Tier 4: Opt-In Host Smoke      │ 8 Host environment checks (4 Windows, │
@@ -31,7 +31,7 @@ LIGHT employs a multi-tiered test suite to guarantee safety, deterministic accur
 ## 2. Test Execution Commands
 
 ### 2.1 Full Automated Discovery Suite (Default CI & Local Baseline)
-Executes all 137 unit and local browser integration tests across the repository:
+Executes all 147 unit and local browser integration tests across the repository:
 
 ```powershell
 .\lightenv\Scripts\python.exe -m unittest discover -s tests -v
@@ -44,7 +44,7 @@ python -m unittest discover -s tests -v
 
 **Expected Baseline Output**:
 ```text
-Ran 145 tests in ~24s
+Ran 155 tests in ~28s
 OK (skipped=8)
 ```
 
@@ -62,12 +62,12 @@ Verifies that all Python modules compile cleanly without syntax errors:
 | **Voice & Handy Loop** | `tests/test_voice.py` | `python -m unittest tests/test_voice.py -v` | 6 |
 | **Voice Providers** | `tests/test_voice_provider.py` | `python -m unittest tests/test_voice_provider.py -v` | 5 |
 | **Laya & Intent Parsing** | `tests/test_laya.py` | `python -m unittest tests/test_laya.py -v` | 16 |
-| **Desktop & Computer** | `tests/test_computer.py` | `python -m unittest tests/test_computer.py -v` | 12 |
+| **Desktop & Computer** | `tests/test_computer.py` | `python -m unittest tests/test_computer.py -v` | 14 |
 | **macOS Platform Unit** | `tests/test_platform_macos.py` | `python -m unittest tests/test_platform_macos.py -v` | 9 |
-| **Browser Unit** | `tests/test_browser.py` | `python -m unittest tests/test_browser.py -v` | 8 |
+| **Browser Unit** | `tests/test_browser.py` | `python -m unittest tests/test_browser.py -v` | 9 |
 | **Local Browser Integration**| `tests/test_integration_local_browser.py` | `python -m unittest tests/test_integration_local_browser.py -v`| 5 |
-| **V2 Queue & LLM Planning** | `tests/test_queue_and_llm.py` | `python -m unittest tests/test_queue_and_llm.py -v` | 24 |
-| **Reliability & Ownership** | `tests/test_new_features.py` | `python -m unittest tests/test_new_features.py -v` | 52 |
+| **V2 Queue & LLM Planning** | `tests/test_queue_and_llm.py` | `python -m unittest tests/test_queue_and_llm.py -v` | 25 |
+| **Reliability & Ownership** | `tests/test_new_features.py` | `python -m unittest tests/test_new_features.py -v` | 58 |
 | **Opt-In Windows Smoke** | `tests/test_windows_smoke.py` | `$env:LIGHT_RUN_WINDOWS_SMOKE="1"; python -m unittest tests/test_windows_smoke.py -v` | 4 |
 | **Opt-In macOS Smoke** | `tests/test_macos_smoke.py` | `LIGHT_RUN_MACOS_SMOKE=1 python -m unittest tests/test_macos_smoke.py -v` | 4 |
 
@@ -75,7 +75,7 @@ Verifies that all Python modules compile cleanly without syntax errors:
 
 ## 3. Detailed Test Suite Inventory
 
-### Tier 1: Deterministic Unit Tests (42 Tests)
+### Tier 1: Deterministic Unit Tests (59 Tests)
 - **`tests/test_voice.py` (6 tests)**:
   - Missing Handy database handling (`FileNotFoundError`).
   - Empty `transcription_history` handling (`None` return).
@@ -90,20 +90,20 @@ Verifies that all Python modules compile cleanly without syntax errors:
   - Mouse movement variants and ambiguous phrase protection.
   - Rejection of malformed/incomplete commands (`"Open"`, `"Search"`, `"Copy from"`).
   - Safety rejection of casual speech (`"How are you"`, `"I am hungry"`) and single unrelated words (`"Cricket"`).
-- **`tests/test_computer.py` (12 tests)**:
-  - App launch/close for `Notepad` and `Calculator`.
+- **`tests/test_computer.py` (14 tests)**:
+  - App launch/close for `Notepad` and `Calculator`, including tracked-process-only normal shutdown.
   - Protected browser termination ensuring only LIGHT-tracked PIDs are terminated.
   - Controlled browser session management and state updates.
   - Mouse relative movements, boundary clamping, and anchor point homing.
   - Keyboard focus typing, key presses, and system hotkey dispatch.
   - Unknown application error handling.
-- **`tests/test_browser.py` (8 tests)**:
+- **`tests/test_browser.py` (9 tests)**:
   - URL normalization and standard website shortcut expansion.
   - Navigation controls (`go_back`, `go_forward`, `refresh`, `scroll`).
   - High-DPI viewport-to-screen coordinate math.
   - Browser start fallback chain from inaccessible Brave to Playwright Chromium.
   - Google reCAPTCHA `/sorry/` detection and automatic DuckDuckGo fallback.
-  - End-to-end mocked context loop execution.
+  - End-to-end mocked context loop execution and verified clipboard failure handling.
 
 ### Tier 2: Real Local-Browser Playwright Integration Tests (5 Tests)
 - **`tests/test_integration_local_browser.py` (5 tests)**:
@@ -115,8 +115,8 @@ Verifies that all Python modules compile cleanly without syntax errors:
   - **Test 4**: Result selection by index and window scroll tracking.
   - **Test 5**: Inclusive text range copying, casing preservation, and DOM highlight cleanup (`clear_highlights`).
 
-### Tier 3: Queue, LLM Planning & Feature Reliability (76 Tests)
-- **`tests/test_queue_and_llm.py` (24 tests)**:
+### Tier 3: Queue, LLM Planning & Feature Reliability (83 Tests)
+- **`tests/test_queue_and_llm.py` (25 tests)**:
   - Producer-consumer command queue prioritizing `CommandPriority.STOP`.
   - Immediate STOP preemption interrupting active `WAIT` actions.
   - Background voice ingestion decoupled from synchronous command execution.
@@ -124,8 +124,8 @@ Verifies that all Python modules compile cleanly without syntax errors:
   - Fast-path verification confirming zero LLM calls for 22 deterministic commands.
   - Local Qwen3 1.7B planning, prompt construction, and plan normalization.
   - Google reCAPTCHA fallback, closed-context browser recovery, and skip button verification.
-  - Pruning downstream dependent commands on prerequisite failure.
-- **`tests/test_new_features.py` (52 tests)**:
+  - Pruning downstream dependent commands on prerequisite failure without crossing utterance boundaries.
+- **`tests/test_new_features.py` (58 tests)**:
   - Foreground-aware typing and active window verification (`computer/screen.py`).
   - Windows window controls (minimize, maximize, restore, switch) and media keys.
   - Autonomous browser agent initialization with local Ollama (`qwen3:1.7b`).
@@ -134,7 +134,10 @@ Verifies that all Python modules compile cleanly without syntax errors:
   - GitHub search integration (`search_github`) and result container selectors.
   - Target candidate scoring and ranking prioritizing official repos over math papers.
   - Semantic post-click destination verification (`verify_destination`).
+  - Rejection of inactive/unchanged destinations and STOP-cancellable verification waits.
   - Browser ownership lifecycle transitions (`NONE` $\to$ `LIGHT` $\to$ `AGENT` $\to$ `NONE`).
+  - Atomic background-agent admission and ownership preservation during isolated deterministic commands.
+  - STOP state cleanup and Browser Use local/privacy defaults.
   - Concurrent execution of desktop commands while an autonomous agent runs.
   - **Background Agent Execution (Tests 45–52 / A–H)**:
     - `test_45_agent_task_runs_in_background_without_blocking_executor`: Verifies `AGENT_TASK` runs in `LIGHT-AgentWorker` thread while executor returns immediately with `"OK"`.
@@ -192,7 +195,7 @@ The test suite validates three mission-critical end-to-end workflows:
   3. User says `"Open Notepad"` or `"Hotkey ctrl+c"`.
   4. Desktop controllers execute immediately without blocking on or waiting for the autonomous agent.
   5. User says `"Stop"`.
-  6. Listener detects STOP in <5ms, sets `cancel_event`, and calls `executor.browser_agent.cancel()`.
+  6. Once the transcription reaches `ingest_text()`, STOP is detected in <5ms, `cancel_event` is set, and `executor.browser_agent.cancel()` is called. Voice polling/STT time is outside this processing measurement.
   7. Agent halts immediately, state resets cleanly, and browser ownership returns to `BrowserOwnership.NONE`.
 
 ### Critical Workflow 3: Wrong Browser Result Rejection & Verification Failure

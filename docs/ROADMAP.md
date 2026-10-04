@@ -18,7 +18,7 @@
 ### Producer-Consumer Queue & Intelligence (Phase 2)
 - [x] Thread-safe `CommandQueue` separating background voice polling (150ms) from action execution.
 - [x] Monotonic transcription ID tracking (`get_transcriptions_since`) eliminating dropped utterances.
-- [x] Emergency `STOP` preemption delivering <5ms cancellation across workers.
+- [x] Emergency `STOP` ingestion preemption delivering <5ms cancellation signaling after transcription receipt (voice polling/STT measured separately).
 - [x] Dependent queued action pruning on prerequisite failure (`cancel_dependent_after_failure`).
 - [x] Local Qwen3 1.7B LLM integration via Ollama (`http://127.0.0.1:11434`) for multi-clause goal planning.
 - [x] Deterministic plan normalization and token filtering (`<think>`, `/no_think`).
@@ -55,6 +55,9 @@
 - [x] Comprehensive system architecture, product specification, and decision records under `docs/`.
 - [x] Windows GitHub Actions CI workflow running full unit and Playwright integration discovery suite.
 - [x] Clean logs directory management (`logs/.gitkeep`) and `.gitignore` hygiene.
+- [x] Deep hardening of compound-plan cancellation, agent admission/state transitions, semantic navigation verification, clipboard verification, and scoped application shutdown.
+- [x] Local/private Browser Use defaults and expanded discovery baseline to 155 tests (147 passed, 8 opt-in skipped on Windows).
+- [ ] Resolve the installed metadata conflict between `browser-use==0.13.10` (`click==8.3.3`) and the current `huggingface-hub` required by Laya (`click>=8.4.2,<9`) before consolidating optional agent dependencies into one resolver transaction.
 - [ ] Automated retry loop on alternative search candidates when initial semantic verification fails.
 - [ ] Dynamic viewport scrolling during candidate ranking to inspect results below the initial fold.
 

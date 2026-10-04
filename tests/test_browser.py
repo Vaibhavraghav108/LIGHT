@@ -122,7 +122,11 @@ class TestBrowserAndContextFlow(unittest.TestCase):
 
         # Step 3: Click the first result
         self.assertEqual(loop.process_text("Click the first result"), "OK")
-        executor.browser.click_result.assert_called_once_with(1, mouse_controller=executor.mouse)
+        executor.browser.click_result.assert_called_once_with(
+            1,
+            mouse_controller=executor.mouse,
+            cancel_event=loop.command_queue.cancel_event,
+        )
 
         # Step 4: Invalid/conversational speech does NOT stop or crash LIGHT
         self.assertEqual(loop.process_text("How are you"), "IGNORED")
@@ -174,6 +178,15 @@ class TestBrowserAndContextFlow(unittest.TestCase):
             any("duckduckgo.com/?q=nature+evolution" in url for url in goto_urls),
             f"Expected DuckDuckGo fallback URL in {goto_urls}",
         )
+
+    def test_copy_selected_text_requires_verified_clipboard_write(self):
+        self.browser.start = MagicMock()
+        self.browser._unfocus_inputs = MagicMock()
+        self.mock_page.evaluate.return_value = "selected text"
+        self.browser._write_and_verify_clipboard = MagicMock(return_value=False)
+
+        with self.assertRaisesRegex(RuntimeError, "Clipboard verification failed"):
+            self.browser.copy_text_range()
 
 
 if __name__ == "__main__":
