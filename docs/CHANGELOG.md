@@ -4,6 +4,23 @@
 
 ---
 
+## [Unreleased / Branch refactor/light-engineering-hardening] — 2026-10-04
+
+### Fixed
+- **Compound-plan queue isolation**: Failed `OPEN_URL`/`SEARCH` prerequisites now cancel only dependent commands from the same utterance, never a matching action queued by another utterance.
+- **Atomic background-agent admission**: Duplicate detection, `agent_running` publication, worker publication, and thread start now occur in one `_agent_lock` critical section.
+- **Truthful ownership and STOP state**: Deterministic browser commands no longer overwrite `BrowserOwnership.AGENT` while the isolated agent is active; STOP now clears stale URL, title, site, browser, and browser-app state.
+- **Named-click verification**: Semantic destination checks now reject an inactive browser and an unchanged pre-click URL. Their navigation wait accepts the queue cancellation event so STOP can interrupt it.
+- **Verified clipboard writes**: Browser copy actions raise when clipboard read-back fails instead of logging a false success.
+- **Cross-platform clipboard shortcuts**: Desktop copy/paste now flow through `KeyboardController`, preserving macOS `ctrl` to `command` mapping.
+- **Scoped desktop app shutdown**: Normal Notepad/TextEdit and Calculator shutdown no longer falls through to image-wide `taskkill`/`pkill`. Only LIGHT-tracked launches are closed unless a caller explicitly opts into `force=True`.
+- **Local Browser Use defaults**: Browser Use configuration is workspace-local by default; anonymized telemetry and cloud sync are disabled before its lazy import.
+
+### Tests
+- Added 10 regression tests for queue-plan isolation, atomic agent admission, ownership preservation, STOP cleanup, cancellable/stale destination verification, clipboard verification/routing, scoped app termination, and Browser Use privacy defaults.
+- Extended push CI branch coverage to `refactor/*` so hardening branches receive the existing Windows/macOS matrix without weakening either job.
+- Current automated discovery baseline: **155 tests: 147 passed, 8 opt-in host smoke tests skipped, 0 failures, 0 errors** on Windows.
+
 ## [Unreleased / Branch feature/macos-platform-support] — 2026-10-04
 *Branch: `feature/macos-platform-support` — "feat: add macOS platform support, platform abstraction, and voice provider architecture"*
 

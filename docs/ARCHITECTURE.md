@@ -77,7 +77,7 @@ computer/                browser/browser.py       browser/agent.py
 - **Role**: Decouples audio ingestion from action execution via a thread-safe producer-consumer model.
 - **Data Flow**:
   - **Producer**: Dedicated background thread `_listener_worker` continuously polls `Handy` every 150ms (`POLL_INTERVAL`), debounces duplicate utterances via `_normalize_for_dedup()`, and ingests spoken text via `LightLoop.ingest_text()`.
-  - **High-Priority Preemption**: `is_explicit_stop_or_cancel()` checks for `"Stop"`, `"Cancel"`, `"Exit"`, or `"Quit"` immediately at ingestion time. If detected, `command_queue.cancel_event.set()` is invoked immediately (<5ms preemption) and a high-priority `STOP` request is queued.
+  - **High-Priority Preemption**: `is_explicit_stop_or_cancel()` checks for `"Stop"`, `"Cancel"`, `"Exit"`, or `"Quit"` immediately at ingestion time. If detected, `command_queue.cancel_event.set()` is invoked immediately (<5ms after `ingest_text()` receives the transcription) and a high-priority `STOP` request is queued. Voice-provider polling and STT publication precede this boundary.
   - **Consumer**: The main loop drains `CommandRequest` items sequentially via `execute_next_queued()` (or `execute_next_queued_async()`).
   - **Failure Propagation**: If a command fails, `cancel_dependent_after_failure()` automatically purges any subsequent dependent actions in the same compound sequence (e.g. failing `SEARCH` skips subsequent `CLICK_RESULT`).
 
@@ -126,7 +126,7 @@ computer/                browser/browser.py       browser/agent.py
 
 ## 3. Browser Ownership Model
 
-To prevent session corruption and event collisions between deterministic Playwright automation and autonomous Browser Use execution, LIGHT enforces a strict three-state ownership model:
+To prevent session corruption and event collisions, LIGHT keeps deterministic Playwright and autonomous Browser Use in separate browser sessions and exposes a three-state ownership model. `AGENT` denotes an active autonomous worker and remains authoritative until that worker exits; it does not mean the independent LIGHT Playwright session is destroyed.
 
 ```text
                   ┌──────────────────┐
@@ -144,10 +144,10 @@ To prevent session corruption and event collisions between deterministic Playwri
      │ Playwright Active│       │ Browser Use Runs │
      └─────────┬────────┘       └─────────┬────────┘
                │                         │
-               │  [Handed to Agent]      │
+               │  [Agent session starts] │
                ├────────────────────────►│
                │                         │
-               │  [Returned to LIGHT]    │
+               │  [Agent completes]      │
                │◄────────────────────────┤
                │                         │
                └────────────┬────────────┘
@@ -167,9 +167,9 @@ To prevent session corruption and event collisions between deterministic Playwri
 2. **`BrowserOwnership.AGENT`**:
    - Active exclusively during `AGENT_TASK` execution.
    - Browser Use creates and manages its own isolated browser session.
-   - The primary Playwright session is locked to prevent command interleaving.
+   - The primary Playwright session is never shared with Browser Use. If a deterministic browser command executes concurrently in LIGHT's separate session, ownership remains `AGENT` until the worker exits.
 3. **Desktop & Browser Concurrency**:
-   - While `BrowserOwnership.AGENT` is active on its background thread (`LIGHT-AgentWorker`), normal desktop commands (`OPEN_APP`, `HOTKEY`, `TYPE`, `MEDIA_*`) and general non-conflicting actions execute unimpeded without queuing delays. The consumer loop does not wait for the agent to finish.
+   - While `BrowserOwnership.AGENT` is active on its background thread (`LIGHT-AgentWorker`), normal desktop commands and deterministic actions in LIGHT's isolated Playwright session execute unimpeded without queuing delays. The consumer loop does not wait for the agent to finish.
 4. **Emergency STOP Reset**:
    - If `"Stop"` or `"Cancel"` is uttered while `AGENT` ownership is active, `executor.browser_agent.cancel()` aborts the agent, `stop_background_agent()` joins the worker within 300ms, and ownership resets immediately to `BrowserOwnership.NONE`.
 
@@ -225,7 +225,7 @@ User Request: "click official repository" (Context: LangGraph)
 | Component | File Path | Inbound Dependencies | Outbound Dependencies | Key Invariants | AI Agent Cautions |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Voice Provider** | [`voice/base.py`](file:///c:/Projects/LIGHT/voice/base.py), [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py) | `core/loop.py` | `sqlite3`, `config.py` | Read-only SQLite mode; monotonic ID ordering; graceful fallback. | Do not assume Handy exists on macOS; handle unavailable provider gracefully. |
-| **Command Queue** | [`core/queue_manager.py`](file:///c:/Projects/LIGHT/core/queue_manager.py) | `core/loop.py` | `threading`, `time` | STOP preemption <5ms; priority ordering; thread-safe. | Never remove `cancel_event` or bypass queue locks. |
+| **Command Queue** | [`core/queue_manager.py`](file:///c:/Projects/LIGHT/core/queue_manager.py) | `core/loop.py` | `threading`, `time` | STOP signaling <5ms after ingestion; priority ordering; thread-safe. | Never remove `cancel_event` or bypass queue locks. |
 | **Voice Loop** | [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py) | `main.py` | `voice/factory.py`, `core/queue_manager.py`, `core/executor.py` | Listener thread decoupled from consumer execution. | Never execute blocking actions inside `_listener_worker`. |
 | **Decision Engine** | [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py) | `brain/laya.py` | `brain/commands.py`, `config.py` | Multi-step fast path <1ms; strictly typed `Command` output. | Do not add network calls or slow operations to deterministic parsing. |
 | **LLM Planner** | [`brain/llm.py`](file:///c:/Projects/LIGHT/brain/llm.py) | `brain/laya.py` | `urllib`, `config.py` | Local Ollama only; timeout-guarded; plan normalized. | Never add cloud API keys; sanitize `/no_think` tokens. |

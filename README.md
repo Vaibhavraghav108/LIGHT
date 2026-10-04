@@ -1,7 +1,7 @@
 # LIGHT — Voice-Controlled Desktop & Browser Automation Assistant
 
 [![LIGHT CI](https://github.com/Vaibhavraghav108/LIGHT/actions/workflows/tests.yml/badge.svg)](https://github.com/Vaibhavraghav108/LIGHT/actions/workflows/tests.yml)
-[![Tests: 137 Passed](https://img.shields.io/badge/Tests-137%20passed-brightgreen.svg)](docs/TESTING.md)
+[![Tests: 147 Passed](https://img.shields.io/badge/Tests-147%20passed-brightgreen.svg)](docs/TESTING.md)
 [![Platform: Windows & macOS](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue.svg)](docs/PRODUCT_SPEC.md)
 [![Architecture: Local--First](https://img.shields.io/badge/Architecture-Local--First-orange.svg)](docs/ARCHITECTURE.md)
 
@@ -68,6 +68,8 @@ python -m venv lightenv
 .\lightenv\Scripts\pip.exe install browser-use==0.13.10 ollama==0.6.1
 ```
 
+LIGHT defaults Browser Use to a repository-local `.light_browseruse/` configuration directory and disables its optional anonymized telemetry and cloud sync. Explicit environment overrides remain available for developers who intentionally opt in.
+
 ### 2. Install Playwright Chromium Browser
 ```powershell
 $env:PLAYWRIGHT_BROWSERS_PATH="c:\Projects\LIGHT\.playwright-browsers"
@@ -86,11 +88,11 @@ Say **"Stop"**, **"Stop light"**, **"Exit"**, or **"Quit"** (or press `Ctrl+C`) 
 
 See [`docs/TESTING.md`](docs/TESTING.md) for full testing documentation.
 
-### Full Discovery Test Suite (145 Tests)
+### Full Discovery Test Suite (155 Tests)
 ```powershell
 .\lightenv\Scripts\python.exe -m unittest discover -s tests -v
 ```
-**Baseline Result**: `Ran 145 tests in ~24s` $\to$ `OK (skipped=8)` (137 executed and passed; 8 opt-in host smoke checks skipped by default).
+**Baseline Result**: `Ran 155 tests in ~28s` $\to$ `OK (skipped=8)` (147 executed and passed; 8 opt-in host smoke checks skipped by default).
 
 ### Static Compilation Syntax Check
 ```powershell

@@ -171,7 +171,7 @@ Playwright and Browser Use both attempted to manipulate Chromium simultaneously 
 Implemented the `BrowserOwnership` state machine (`NONE`, `LIGHT`, `AGENT`):
 - When Browser Use starts: `[BROWSER] Session handed to Browser Use` (`BrowserOwnership.AGENT`).
 - Browser Use creates its own independent session.
-- Playwright actions are blocked while `AGENT` ownership is active.
+- Browser Use never receives LIGHT's Playwright context. Deterministic commands may continue in LIGHT's independent session while `AGENT` remains the authoritative ownership state.
 - Desktop commands (`OPEN_APP`, `HOTKEY`, `TYPE`, `MEDIA_*`) remain fully responsive.
 - When Browser Use finishes: `[BROWSER] Session returned to LIGHT` (`BrowserOwnership.LIGHT`).
 
@@ -424,3 +424,104 @@ In [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py), updated `Ac
 - `tests/test_new_features.py::TestNewFeatures::test_12_stop_preemption_interrupts_wait_under_5ms`
 - `tests/test_new_features.py::TestNewFeatures::test_45_agent_task_dispatch_is_non_blocking`
 - `tests/test_queue_and_llm.py::TestProducerConsumerQueueAndLLM::test_03_stop_and_cancel_priority_preempts_wait_and_queued_commands`
+
+---
+
+## Issue 15 — Failed Plan Cancelled Another Utterance's Queued Click
+
+### Problem
+When a compound `SEARCH` failed, dependent-action pruning could cancel the first queued `CLICK_RESULT` even when that click belonged to a different utterance.
+
+### Root Cause
+`CommandQueue.cancel_dependent_after_failure()` used `(same_plan or cancelled == 0)`. The second term deliberately selected one dependent action even when `CommandRequest.text` did not match the failed plan.
+
+### Fix
+Dependent actions are now cancelled only when their plan text matches `failed_text`; passing no plan text retains the explicit all-plan behavior.
+
+### Regression Test
+- `tests/test_queue_and_llm.py::TestProducerConsumerQueueAndLLM::test_25_failed_plan_only_cancels_its_own_dependent_commands`
+
+---
+
+## Issue 16 — Named Result Click Could Verify the Unchanged Search Page
+
+### Problem
+A named click such as `"official repository"` could fail to navigate yet still pass semantic verification because the unchanged GitHub search URL and page text contained the expected tokens.
+
+### Root Cause
+`verify_destination()` waited for a URL change but did not require one. It also returned silently if the browser became inactive, and its wait did not observe STOP cancellation.
+
+### Fix
+Verification now rejects inactive browsers and unchanged pre-click URLs. The bounded navigation wait accepts the queue `cancel_event` and exits immediately on STOP.
+
+### Regression Tests
+- `tests/test_new_features.py::TestNewFeatures::test_41b_semantic_verification_rejects_inactive_and_unchanged_pages`
+- `tests/test_new_features.py::TestNewFeatures::test_41c_semantic_verification_wait_is_stop_cancellable`
+
+---
+
+## Issue 17 — Agent Admission and Ownership State Races
+
+### Problem
+Concurrent `AGENT_TASK` calls could both pass duplicate detection before either published its worker. Separately, a deterministic browser action during agent execution overwrote `BrowserOwnership.AGENT` with `LIGHT` even though the agent remained active.
+
+### Root Cause
+Duplicate detection and worker assignment occurred in separate `_agent_lock` critical sections. `LightState.record_command()` unconditionally assigned LIGHT ownership for browser actions.
+
+### Fix
+Agent admission, state publication, worker publication, and thread start now occur in one critical section. Browser state recording preserves `AGENT` ownership until the isolated worker exits.
+
+### Regression Tests
+- `tests/test_new_features.py::TestNewFeatures::test_43b_deterministic_browser_command_preserves_active_agent_ownership`
+- `tests/test_new_features.py::TestNewFeatures::test_49b_agent_admission_uses_one_atomic_critical_section`
+
+---
+
+## Issue 18 — Normal Desktop Close Used Image-Wide Force Kill
+
+### Problem
+Closing Notepad/TextEdit or Calculator without a LIGHT-tracked launch fell through to `taskkill /F /IM ...` or `pkill -f ...`, risking unrelated user documents and processes.
+
+### Root Cause
+`AppController.close()` always requested force-close commands for standard utilities after checking its tracked `Popen` list.
+
+### Fix
+Normal close now terminates only LIGHT-tracked processes. macOS may issue a graceful AppleScript quit after a tracked `open -a` launch because that launcher exits immediately. Image-wide termination is available only through explicit `force=True`.
+
+### Regression Tests
+- `tests/test_computer.py::TestComputerControl::test_close_apps`
+- `tests/test_computer.py::TestComputerControl::test_close_notepad_only_terminates_light_tracked_process`
+
+---
+
+## Issue 19 — Browser Use Global Config Write and Optional Network Defaults
+
+### Problem
+The lazy Browser Use import attempted to write under the user's global configuration directory and defaulted optional telemetry/cloud sync on. Restricted or hermetic environments failed during import, and the behavior conflicted with LIGHT's local-first default.
+
+### Root Cause
+LIGHT did not initialize Browser Use's configuration environment before importing the optional dependency.
+
+### Fix
+`config.py` selects the ignored repository-local `.light_browseruse/` directory and defaults `ANONYMIZED_TELEMETRY=false` and `BROWSER_USE_CLOUD_SYNC=false`. `AutonomousBrowserAgent` reasserts those defaults immediately before the lazy import while respecting explicit user overrides.
+
+### Regression Test
+- `tests/test_new_features.py::TestNewFeatures::test_53_browser_agent_defaults_are_local_and_private`
+
+---
+
+## Issue 20 — False Clipboard Success and Stale STOP Browser State
+
+### Problem
+Browser copy actions ignored clipboard read-back failure and reported success. STOP closed the browser but returned before `LightState.record_command()`, leaving stale URL/site/browser context that could influence subsequent planning.
+
+### Root Cause
+The boolean result of `_write_and_verify_clipboard()` was discarded, and STOP had a special early return that bypassed normal state recording.
+
+### Fix
+Browser copy paths raise on failed clipboard verification. Desktop copy/paste routes through `KeyboardController` for platform modifier mapping. STOP records its command after shutdown and clears browser URL, title, site, app, and ownership state.
+
+### Regression Tests
+- `tests/test_browser.py::TestBrowserAndContextFlow::test_copy_selected_text_requires_verified_clipboard_write`
+- `tests/test_computer.py::TestComputerControl::test_executor_routes_clipboard_shortcuts_through_platform_keyboard`
+- `tests/test_new_features.py::TestNewFeatures::test_44b_stop_clears_stale_browser_state`

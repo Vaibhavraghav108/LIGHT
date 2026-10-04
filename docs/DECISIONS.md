@@ -61,7 +61,7 @@ Decouple speech-to-text audio ingestion from action execution using a thread-saf
 2. **Preemption**: A queue enables immediate out-of-band preemption for emergency `"Stop"` commands without waiting for prior commands to finish executing.
 
 ## Consequences
-- **Positive**: Voice listener never drops transcriptions; emergency stop commands are detected in <5ms; dependent commands can be pruned on failure.
+- **Positive**: Voice listener never drops transcriptions; emergency stop commands are signalled in <5ms after ingestion; dependent commands can be pruned on failure.
 - **Negative**: Requires thread-safe state synchronization and intermediate planning state clones (`LightState.clone_for_planning()`).
 
 ## Related Components
@@ -97,14 +97,14 @@ Retain Playwright Chromium as LIGHT's primary deterministic browser automation e
 Accepted
 
 ## Decision
-Enforce a formal ownership lifecycle (`BrowserOwnership.NONE`, `LIGHT`, `AGENT`) tracked in `LightState` and managed by `Executor`.
+Enforce a formal ownership lifecycle (`BrowserOwnership.NONE`, `LIGHT`, `AGENT`) tracked in `LightState` and managed by `Executor`. Browser Use and LIGHT's deterministic Playwright controller use separate browser sessions; `AGENT` remains authoritative while its worker is active.
 
 ## Reason
-1. **Session Corruption**: If Playwright attempts to navigate or click elements while Browser Use is actively controlling a page, both controllers will crash or trigger race conditions.
-2. **Concurrency Clarity**: Normal desktop commands (`OPEN_APP`, `HOTKEY`, `TYPE`, `MEDIA_*`) can proceed safely while `AGENT` ownership is active, but deterministic browser commands must be blocked or wait.
+1. **Session Corruption**: Giving Playwright and Browser Use the same context would create dual-controller races, so the contexts must never be shared.
+2. **Concurrency Clarity**: Desktop commands and deterministic browser commands in LIGHT's independent session may proceed while `AGENT` ownership is active; they must not overwrite the agent-running ownership signal.
 
 ## Consequences
-- **Positive**: Eliminates dual-controller race conditions; ensures clean handover and return of browser sessions; allows desktop multitasking while research agents run.
+- **Positive**: Eliminates dual-controller context races while preserving desktop and deterministic-browser responsiveness during research.
 - **Negative**: Subsystems must check and update ownership flags during state transitions.
 
 ## Related Components
@@ -112,7 +112,7 @@ Enforce a formal ownership lifecycle (`BrowserOwnership.NONE`, `LIGHT`, `AGENT`)
 
 ---
 
-# ADR-006 — Highest-Priority Emergency STOP Preemption (<5ms)
+# ADR-006 — Highest-Priority Emergency STOP Ingestion Preemption (<5ms)
 
 ## Status
 Accepted
@@ -125,8 +125,9 @@ Assign highest priority to emergency cancellation phrases (`"Stop"`, `"Cancel"`,
 2. **Interruptibility**: Long-running actions (e.g. `WAIT 10`, autonomous agent exploration) must abort immediately upon voice command.
 
 ## Consequences
-- **Positive**: Hard preemption latency under 5ms; stops runaway agent loops or incorrect automated actions instantly.
+- **Positive**: Hard cancellation signaling under 5ms once the transcription reaches `ingest_text()`; stops runaway agent loops without waiting for normal queue scheduling.
 - **Negative**: All blocking or long-running operations must monitor and accept `cancel_event`.
+- **Measurement Boundary**: Handy's 150ms polling interval plus STT/database publication precedes `ingest_text()` and is not included in the sub-5ms processing measurement.
 
 ## Related Components
 - [`core/queue_manager.py`](file:///c:/Projects/LIGHT/core/queue_manager.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
