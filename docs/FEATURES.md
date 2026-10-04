@@ -1,100 +1,90 @@
-# LIGHT — Feature Inventory & Implementation Status
+# LIGHT Feature Status (`v0.5.0`)
 
-> **Inventory Status**: All entries marked **`[x]`** are verified against the active codebase and covered by automated tests. Entries marked **`[ ]`** represent planned future enhancements.
+Status reflects source plus available evidence, not aspiration. Definitions are
+in [README.md](README.md). “CI” means the automated Windows/macOS matrix; it is
+not physical-device certification.
 
----
+## Voice and core
 
-## 1. Voice & Speech-to-Text Subsystem (`voice/`)
+| Feature | Status | Evidence | Limits |
+| --- | --- | --- | --- |
+| `VoiceInputProvider` and factory | Implemented | `voice/`; `test_voice_provider.py` | one production provider plus unavailable fallback |
+| Handy SQLite ingestion | Partial | read-only provider tests; Windows smoke exists | requires external Handy; physical macOS path unverified |
+| ordered transcript polling | Implemented | `test_voice.py`; queue tests | polling, not push; default 150ms |
+| duplicate suppression | Implemented | voice/queue tests | one-second policy with repeatable-action exceptions |
+| unavailable-provider idle mode | Implemented | provider tests | no commands arrive until a provider exists |
+| direct microphone/VAD/Whisper | Not implemented | no source | Handy performs STT/VAD externally |
+| priority queue and plan-scoped pruning | Implemented | `test_queue_and_llm.py` | consumer still executes ordinary commands sequentially |
+| ingestion-time STOP priority | Implemented | queue/new-feature timing tests | sub-5ms boundary excludes STT/polling; running calls vary |
+| thread-safe contextual state | Implemented | state/ownership tests | observation can become stale between checks |
 
-| Feature | Status | Description | Example Spoken Input | Source Files | Test Files |
-| :--- | :---: | :--- | :--- | :--- | :--- |
-| **VoiceInputProvider Abstraction** | `[x]` | Decouples speech ingestion behind `VoiceInputProvider` interface with pluggable providers and graceful fallback. | *(System voice ingestion)* | [`voice/base.py`](file:///c:/Projects/LIGHT/voice/base.py), [`voice/factory.py`](file:///c:/Projects/LIGHT/voice/factory.py) | `tests/test_voice_provider.py` |
-| **Continuous Audio Ingestion** | `[x]` | Reads speech-to-text transcriptions from local Handy SQLite database (`history.db`) in read-only URI mode. | *(Continuous ambient speech)* | [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py), [`voice/handy.py`](file:///c:/Projects/LIGHT/voice/handy.py) | `tests/test_voice.py`, `tests/test_voice_provider.py` |
-| **Monotonic ID Polling** | `[x]` | Tracks `transcription_history.id` to guarantee zero dropped utterances during fast speech. | *(Automatic background loop)* | [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py) | `tests/test_voice.py` |
-| **Locked Database Resilience** | `[x]` | Gracefully catches `sqlite3.OperationalError: database is locked` and recovers without dropping state. | *(Handy writing during read)* | [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py) | `tests/test_voice.py` |
-| **Utterance Debouncing** | `[x]` | Debounces immediate duplicate transcriptions within cooldown window (1.0s) for non-repeatable actions. | *(Duplicate voice transcription)*| [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py) | `tests/test_voice.py` |
-| **Graceful Unavailable Fallback** | `[x]` | Operates cleanly with informative status when no voice provider is configured or available on the host OS. | *(Startup on host without Handy)* | [`voice/unavailable_provider.py`](file:///c:/Projects/LIGHT/voice/unavailable_provider.py) | `tests/test_voice_provider.py` |
-| **Direct Local Whisper Integration** | `[ ]` | Standalone in-process Whisper VAD pipeline without requiring external Handy installation on macOS/Windows. | *(Planned standalone mode)* | — | — |
+## Brain and planning
 
----
+| Feature | Status | Evidence | Limits |
+| --- | --- | --- | --- |
+| deterministic single/compound parsing | Implemented | parser and queue tests | grammar/vocabulary based |
+| contextual continuations | Implemented | `test_new_features.py` | relies on recorded site/search context |
+| casual/malformed speech rejection | Implemented | Laya/queue tests | heuristic and guarded classifier behavior |
+| local Qwen3 1.7B planning | Partial | mocked transport/normalization tests | live Ollama/model quality not part of default suite |
+| LLM action validation | Implemented | malformed/action tests | text targets still require downstream checks |
+| deterministic offline fallback | Implemented | queue/LLM tests | covers selected complex-search forms |
+| guarded Laya fallback | Implemented | `test_laya.py` | model dependency is loaded at normal startup |
 
-## 2. Intent Parsing & Decision Engine (`brain/`)
+## Desktop and platform
 
-| Feature | Status | Description | Example Spoken Input | Source Files | Test Files |
-| :--- | :---: | :--- | :--- | :--- | :--- |
-| **Deterministic Fast Path** | `[x]` | Regex and grammatical parsing of 25+ discrete actions in <1ms without LLM overhead. | `"Open YouTube"`, `"Scroll down"` | [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py) | `tests/test_laya.py`, `tests/test_new_features.py` |
-| **Multi-Command Parsing** | `[x]` | Splits compound sentences on conjunctions (`and`, `then`, `,`) into sequential `Command` objects. | `"Open GitHub, search for LangGraph and open the official repository."` | [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py) | `tests/test_queue_and_llm.py`, `tests/test_new_features.py` |
-| **Contextual Continuations** | `[x]` | Context-aware resolution of follow-up utterances using active site and query state. | `"Official repository"`, `"First result"` | [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py) | `tests/test_new_features.py` |
-| **Casual Speech Rejection** | `[x]` | Ignores conversational phrases and unrelated single words without raising spurious errors. | `"How are you?"`, `"Cricket"`, `"That's interesting"` | [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py), [`brain/laya.py`](file:///c:/Projects/LIGHT/brain/laya.py) | `tests/test_laya.py` |
-| **Laya Strict Safety Guard** | `[x]` | ML intent classification fallback restricted to strict safety choice sets with prefix validation. | `"Click Subscribe"` | [`brain/laya.py`](file:///c:/Projects/LIGHT/brain/laya.py) | `tests/test_laya.py` |
+| Feature | Status | Evidence | Limits |
+| --- | --- | --- | --- |
+| `PlatformController` boundary | Implemented | platform unit tests and source inspection | Linux is unsupported |
+| Windows desktop control | Partial | unit tests, CI, opt-in smoke suite | not every physical action runs in default CI |
+| macOS desktop control | Partial | mocked unit tests and macOS CI | physical permissions/hardware/voice unverified |
+| known-app launch and tracked close | Implemented | `test_computer.py` | fixed app allowlist; external instances are not normal close targets |
+| foreground-aware typing | Partial | mocked focus/routing tests | focus can change after verification |
+| hotkeys and clipboard modifier mapping | Implemented | Windows/macOS unit tests | host clipboard availability is environment-sensitive |
+| window/media controls | Partial | parser/routing/platform tests | real application behavior varies by host |
+| precision mouse and screen anchors | Partial | mocked/unit tests, host smoke available | mixed-DPI multi-monitor not validated |
+| arbitrary installed-app discovery | Not implemented | no source | planned |
 
----
+## Deterministic browser
 
-## 3. Local Language Model Planning (`brain/llm.py`)
+| Feature | Status | Evidence | Limits |
+| --- | --- | --- | --- |
+| Playwright Chromium lifecycle/recovery | Implemented | unit plus local real-browser tests | executable/profile/host policies can prevent launch |
+| URL shortcuts and contextual search | Implemented | browser/parser tests | website DOM changes can break selectors |
+| Google challenge detection with DuckDuckGo fallback | Implemented | browser unit test | fallback is not a CAPTCHA bypass guarantee |
+| visible DOM element location | Implemented | local-browser tests | loaded page/viewport only |
+| numeric result selection | Implemented | local-browser tests | explicit ordinal may still choose an undesired result |
+| named-target ranking | Implemented | ranking tests | heuristic; no below-fold alternative retry yet |
+| changed-URL and semantic destination verification | Implemented | verification regressions | heuristic content checks; not a trust/reputation service |
+| physical click post-state checks | Partial | unit/local-page tests | generic web controls cannot all expose definitive state |
+| copy range and clipboard read-back | Partial | unit/local-browser test | depends on an accessible system clipboard |
+| multi-tab coordination | Not implemented | no source | planned |
 
-| Feature | Status | Description | Example Spoken Input | Source Files | Test Files |
-| :--- | :---: | :--- | :--- | :--- | :--- |
-| **Local Ollama Integration** | `[x]` | Uses local Qwen3 1.7B (`http://127.0.0.1:11434`) for complex, multi-clause natural language search planning. | `"Find a beginner Python tutorial on YouTube and open the most relevant result"` | [`brain/llm.py`](file:///c:/Projects/LIGHT/brain/llm.py) | `tests/test_queue_and_llm.py` |
-| **Deterministic Plan Normalization** | `[x]` | Sanitizes LLM outputs, injects missing prerequisite URLs, and validates action sequences. | *(Any planned LLM sequence)* | [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py) | `tests/test_queue_and_llm.py` |
-| **No-Think Token Filtering** | `[x]` | Strips `<think>` tags and `/no_think` formatting noise from small model output streams. | *(Model reasoning output)* | [`brain/llm.py`](file:///c:/Projects/LIGHT/brain/llm.py) | `tests/test_queue_and_llm.py` |
-| **Offline Fallback Routing** | `[x]` | Seamlessly falls back to deterministic complex rule parsing if Ollama is unreachable. | *(Complex search during offline)* | [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py) | `tests/test_queue_and_llm.py` |
+## Autonomous agent
 
----
+| Feature | Status | Evidence | Limits |
+| --- | --- | --- | --- |
+| Browser Use with local Ollama | Experimental | initialization/adapter tests | optional dependencies; live agent not in default CI |
+| intent routing to `AGENT_TASK` | Implemented | parser tests | heuristic trigger phrases |
+| isolated Browser Use session | Implemented | ownership tests/source | two browsers may operate concurrently by design |
+| one atomic agent admission | Implemented | concurrency regression | one task at a time |
+| non-blocking `LIGHT-AgentWorker` | Implemented | sync/async consumer tests | daemon may outlive bounded join if dependency hangs |
+| cooperative STOP/cancellation | Partial | mocked async/worker tests | Browser Use internals may not stop immediately |
+| agent result notification UI | Not implemented | logs/state only | no dedicated completion surface |
 
-## 4. Desktop & Application Automation (`computer/`)
+## Reliability, privacy, and delivery
 
-| Feature | Status | Description | Example Spoken Input | Source Files | Test Files |
-| :--- | :---: | :--- | :--- | :--- | :--- |
-| **PlatformController Abstraction**| `[x]` | Abstract OS interface encapsulating platform-specific processes, window management, and utilities. | *(OS-level dispatch)* | [`computer/platform_base.py`](file:///c:/Projects/LIGHT/computer/platform_base.py), [`computer/platform_factory.py`](file:///c:/Projects/LIGHT/computer/platform_factory.py) | `tests/test_platform_macos.py` |
-| **Windows Platform Controller** | `[x]` | Native Windows implementation using Win32, ctypes, and PowerShell CIM process queries. | *(Windows system controls)* | [`computer/platform_windows.py`](file:///c:/Projects/LIGHT/computer/platform_windows.py) | `tests/test_computer.py`, `tests/test_windows_smoke.py` |
-| **macOS Platform Controller** | `[x]` | Native macOS implementation using AppleScript (`osascript`), `open`, POSIX process signals, and Retina scaling. | *(macOS system controls)* | [`computer/platform_macos.py`](file:///c:/Projects/LIGHT/computer/platform_macos.py) | `tests/test_platform_macos.py`, `tests/test_macos_smoke.py` |
-| **Application Launch & Close** | `[x]` | Launches and cleanly closes supported apps (`Notepad`/`TextEdit`, `Calculator`, `Brave`, `Chrome`). | `"Open Notepad"`, `"Close Notepad"` | [`computer/apps.py`](file:///c:/Projects/LIGHT/computer/apps.py) | `tests/test_computer.py`, `tests/test_platform_macos.py` |
-| **Process Tree Protection** | `[x]` | Protects launcher shim PIDs and unrelated user instances during application close. | *(Closing LIGHT browser)* | [`computer/apps.py`](file:///c:/Projects/LIGHT/computer/apps.py) | `tests/test_computer.py` |
-| **Foreground Window Verification**| `[x]` | Inspects active foreground window and process title before executing typing actions. | *(Pre-typing verification)* | [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py) | `tests/test_new_features.py`, `tests/test_platform_macos.py` |
-| **Keyboard Typing & Hotkeys** | `[x]` | Types text with focus checks; executes platform-mapped key combinations (`ctrl+c` / `cmd+c`). | `"Type Hello World"`, `"Press enter"`, `"Hotkey ctrl+v"` | [`computer/keyboard.py`](file:///c:/Projects/LIGHT/computer/keyboard.py) | `tests/test_computer.py`, `tests/test_platform_macos.py` |
-| **Media Playback Controls** | `[x]` | Controls media playback, volume, mute, and video seek offsets. | `"Pause video"`, `"Play"`, `"Mute"`, `"Volume up"`, `"Go back 10 seconds"` | [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py` |
-| **Window State Management** | `[x]` | Minimizes, maximizes, restores, and switches desktop application windows across Windows and macOS. | `"Minimize window"`, `"Maximize window"`, `"Switch window"` | [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py`, `tests/test_platform_macos.py` |
-| **Precision Mouse Control** | `[x]` | Relative pixel nudges, screen anchor homing, semantic distances, and physical clicking. | `"Move mouse 100 pixels right"`, `"Move mouse slightly up"`, `"Click"` | [`computer/mouse.py`](file:///c:/Projects/LIGHT/computer/mouse.py) | `tests/test_computer.py` |
-| **Arbitrary Desktop App Launch**| `[ ]` | Dynamic discovery for launching any unindexed installed application. | `"Open Spotify"`, `"Open Slack"` | — | — |
+| Feature | Status | Evidence | Limits |
+| --- | --- | --- | --- |
+| process-safe normal app close | Implemented | app regression tests | explicit `force=True` remains a broad operation |
+| local Browser Use config/privacy defaults | Implemented | config regression | explicit user environment overrides are respected |
+| single-instance cleanup | Partial | mocked tests, Windows smoke | stale/permission-constrained processes may resist termination |
+| Windows/macOS CI matrix | Implemented | GitHub Actions | no Linux job; host smoke disabled by default |
+| runtime performance logging | Implemented | queue request metrics | logs are ignored and not telemetry |
+| cloud LLM/analytics requirement | Not implemented | source/config | requested websites and package installs use network |
 
----
+## Planned, not current behavior
 
-## 5. Deterministic Browser Automation (`browser/browser.py`)
-
-| Feature | Status | Description | Example Spoken Input | Source Files | Test Files |
-| :--- | :---: | :--- | :--- | :--- | :--- |
-| **Playwright Chromium Engine** | `[x]` | Single-session browser automation using Playwright Chromium with persistent context fallback. | `"Open YouTube"`, `"Go to github.com"` | [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py) | `tests/test_browser.py`, `tests/test_integration_local_browser.py` |
-| **Context-Aware Search** | `[x]` | Routes search queries to YouTube (on YouTube), GitHub (on GitHub), or Google default. | `"Search for Coldplay"`, `"Search on GitHub for LangGraph"` | [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py) | `tests/test_browser.py`, `tests/test_new_features.py` |
-| **Google CAPTCHA Bypass** | `[x]` | Detects Google `/sorry/` reCAPTCHA pages and automatically switches to DuckDuckGo. | `"Search Google for nature evolution"` | [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py) | `tests/test_browser.py` |
-| **DOM Element Detection** | `[x]` | Scans visible viewport DOM, skips hidden duplicates, scrolls element into view, and clicks. | `"Click Subscribe"`, `"Click Ask about files"` | [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py) | `tests/test_integration_local_browser.py` |
-| **Result Selection by Number** | `[x]` | Clicks Nth search result or video entry (`1st` through `5th`). | `"Click the first result"`, `"Select second video"` | [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py) | `tests/test_integration_local_browser.py` |
-| **Target Candidate Ranking** | `[x]` | Multi-feature scoring (+120 domain, +80 slug, +50 target) prioritizing official links over math papers. | `"Click official repository"`, `"Open official docs"` | [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py) | `tests/test_new_features.py` |
-| **Semantic Destination Verification**| `[x]` | Inspects destination page URL, title, and visible text to verify match with target query. | *(Post-click verification)* | [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py) | `tests/test_new_features.py` |
-| **Inclusive Text Range Copying**| `[x]` | Copies inclusive text between start and end boundaries with casing preservation and highlight cleanup. | `"Copy from I know this one will hurt till demolish"` | [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py) | `tests/test_integration_local_browser.py` |
-| **Page Reading & Navigation** | `[x]` | Reads page title, visible text content, scrolls up/down, navigates back/forward/refresh. | `"Read title"`, `"Read page"`, `"Scroll down"`, `"Go back"` | [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py) | `tests/test_browser.py`, `tests/test_integration_local_browser.py` |
-
----
-
-## 6. Autonomous Web Agent (`browser/agent.py`)
-
-| Feature | Status | Description | Example Spoken Input | Source Files | Test Files |
-| :--- | :---: | :--- | :--- | :--- | :--- |
-| **Browser Use Ollama Agent** | `[x]` | Autonomous multi-step browsing agent powered by Browser Use and local Qwen3 1.7B via Ollama. | `"Research 3 Python AI agent frameworks and compare them"` | [`browser/agent.py`](file:///c:/Projects/LIGHT/browser/agent.py) | `tests/test_new_features.py` |
-| **Autonomous Intent Detection**| `[x]` | Distinguishes open-ended research/summarization goals from single DOM element lookups. | `"Find official GitHub page for Python and tell me its URL"` | [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py) | `tests/test_new_features.py` |
-| **Event-Loop-Safe Execution** | `[x]` | Native async task runner (`execute_task`) compatible with LIGHT's active event loop (no `asyncio.run()` crash).| *(Agent execution in async loop)* | [`browser/agent.py`](file:///c:/Projects/LIGHT/browser/agent.py) | `tests/test_new_features.py` |
-| **Immediate Agent STOP Abort** | `[x]` | Immediately aborts active Browser Use exploration loop when user utters `"Stop"` or `"Cancel"`. | `"Stop"` *(during research)* | [`browser/agent.py`](file:///c:/Projects/LIGHT/browser/agent.py) | `tests/test_new_features.py` |
-| **Browser Ownership Model** | `[x]` | Isolates Browser Use (`AGENT`) from Playwright (`LIGHT`), preventing session collisions. | *(Handover & return logging)* | [`core/state.py`](file:///c:/Projects/LIGHT/core/state.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py` |
-| **Managed Background Worker**| `[x]` | Dispatches `AGENT_TASK` to dedicated `LIGHT-AgentWorker` thread, returning `OK` immediately to keep consumer loop responsive. | *(Agent task background execution)* | [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py` |
-| **Duplicate Agent Protection**| `[x]` | Rejects new `AGENT_TASK` invocations (`REJECTED`) when an agent worker is already actively running. | *(Second agent request)* | [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py` |
-| **Concurrent Command Execution**| `[x]` | Desktop commands (`Open Notepad`, hotkeys) and normal browser actions execute unimpeded while agent runs in background. | `"Open Notepad"`, `"Volume up"` *(during research)* | [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py` |
-
----
-
-## 7. Safety, Preemption & System Reliability
-
-| Feature | Status | Description | Example Spoken Input | Source Files | Test Files |
-| :--- | :---: | :--- | :--- | :--- | :--- |
-| **Emergency STOP Preemption** | `[x]` | High-priority preemption detecting STOP and setting cancellation flags in <5ms after command ingestion; provider polling/STT latency is measured separately. | `"Stop"`, `"Cancel"`, `"Quit"`, `"Exit"` | [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py), [`core/queue_manager.py`](file:///c:/Projects/LIGHT/core/queue_manager.py) | `tests/test_queue_and_llm.py`, `tests/test_new_features.py` |
-| **Dependent Action Cancellation**| `[x]` | Cancels remaining dependent actions from the same compound utterance if a prerequisite step fails, without cancelling another utterance's work. | *(Search failure cancels its own click)*| [`core/queue_manager.py`](file:///c:/Projects/LIGHT/core/queue_manager.py) | `tests/test_queue_and_llm.py` |
-| **Single-Instance Enforcement** | `[x]` | Detects and terminates stale background `main.py` processes on Windows startup via PID tracking. | *(Process startup)* | [`main.py`](file:///c:/Projects/LIGHT/main.py) | `tests/test_windows_smoke.py` |
-| **High-DPI Coordinate Mapping** | `[x]` | Converts browser viewport CSS coordinates to physical screen pixels with DPI awareness. | *(DOM element click)* | [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py) | `tests/test_browser.py` |
+Direct Whisper/VAD, dynamic application discovery, multi-monitor DPI
+normalization, multi-tab coordination, below-fold candidate retry, local visual
+grounding, system-tray status, and TTS are roadmap items. They must not be
+described as released features.

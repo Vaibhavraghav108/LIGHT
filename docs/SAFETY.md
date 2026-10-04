@@ -1,109 +1,118 @@
-# LIGHT — Safety & Operational Invariants
+# LIGHT Safety and Operational Boundaries
 
-> **Mandatory Policy**: This document outlines the critical safety invariants, operational constraints, and failure-mode policies enforced across **LIGHT**. No pull request, architectural modification, or AI agent intervention may violate these invariants.
+LIGHT controls a user's mouse, keyboard, processes, and browser. These rules are
+product invariants, but guarantees apply only at the stated measurement and
+verification boundaries.
 
----
+## Mandatory invariants
 
-## 1. Safety Invariants Matrix
+| Rule | Enforcement | Honest boundary |
+| --- | --- | --- |
+| Explicit STOP is highest priority | detected before planning; cancellation event set; pending queue cleared; STOP inserted first | <5ms target begins at `ingest_text()`, not spoken audio |
+| Listener stays independent | `LIGHT-VoiceListener` only reads/debounces/enqueues | provider/database polling still has default 150ms cadence |
+| Dependent failure is plan-scoped | failed search/open prunes matching utterance dependents | plan identity is currently the raw utterance text |
+| Agent work does not block normal commands | one `LIGHT-AgentWorker` returns control immediately | agent and deterministic browser can consume resources concurrently |
+| Browser sessions are isolated | Browser Use and Playwright never share a context | `BrowserOwnership` is a state signal, not a lock |
+| No blind named-result fallback | ranked visible candidates require confidence | explicit numeric result requests intentionally select an ordinal |
+| Dispatch is not success | focus, click state, clipboard, and named destination checks | verification is action-specific and cannot prove every UI side effect |
+| Normal close is scoped | only LIGHT-tracked processes are terminated | explicit `force=True` can be broad and must not be normal routing |
+| OS/provider details stay behind interfaces | `PlatformController`; `VoiceInputProvider` | generic subprocess execution may run commands returned by the platform |
+| LLM output is untrusted | structured JSON, action allowlist, app/URL/STOP validation | permitted text/click targets still need executor/browser checks |
+| Local-first defaults remain | local STT database/model; Browser Use telemetry/cloud sync off by default | web tasks necessarily send requests/content to requested sites |
+| Tests may not be weakened | regressions require tests and CI matrix preservation | mocked/CI tests are not physical-host certification |
 
-| # | Invariant Rule | Operational Enforcement | Failure Mode if Violated |
-| :-: | :--- | :--- | :--- |
-| **1** | **STOP/CANCEL Ingestion Preemption (<5ms)** | Once an utterance reaches `ingest_text()`, `is_explicit_stop_or_cancel()` sets the global `cancel_event` and enqueues high-priority `STOP` without waiting for planning. End-to-end voice latency also includes the provider's polling/STT delay. | Runaway automation, delayed aborts, user locked out during bad action. |
-| **2** | **No Blind Clicks on Ambiguous Targets** | `locate_element_in_viewport` requires candidate score $\ge 20$. Refuses fallback to result #1 on named targets. | Landing on irrelevant search results, ads, or malicious links. |
-| **3** | **Physical Click $\neq$ Task Success** | Dispatched mouse events are treated as unconfirmed until destination commits and is semantically checked. | False reporting of completed tasks when page errors or navigates incorrectly. |
-| **4** | **Semantic Destination Verification** | `verify_destination()` inspects landing URL, domain, title, and body tokens against expected query semantics. | Reporting success when stranded on an unrelated domain or error page. |
-| **5** | **Strict LLM Output Normalization** | Raw LLM output from Qwen3 1.7B is passed through `normalize_command_plan()`, which validates all action targets against allowlists. | Hallucinated command targets, shell escapes, or arbitrary URL visits. |
-| **6** | **Strict Browser Session Isolation** | State tracks `BrowserOwnership` (`NONE`, `LIGHT`, `AGENT`). Browser Use owns an independent session; it never shares LIGHT's primary Playwright context. `AGENT` remains authoritative while its worker is active, even if deterministic commands use the separate LIGHT session. | Dual-driver session collisions, corrupted contexts, crashed browser automation. |
-| **7** | **Loud Failures (Zero False Positives)** | When an action or verification fails, it raises an exception and logs `[ERROR]`. Never reports `[EXECUTOR] OK`. | Silent degradation, cascading downstream errors, user deception. |
-| **8** | **Pruning Dependent Queued Actions** | `cancel_dependent_after_failure()` automatically cancels downstream dependent actions in a compound batch if a prerequisite fails. | Executing a click or copy after a search failed, corrupting system state. |
-| **9** | **Foreground Window Focus Guard** | `computer/screen.py` verifies foreground window before keystrokes are typed via `KeyboardController`. | Keystrokes typed into background terminal, IDE, or personal chat window. |
-| **10**| **Test Suite Protection Guarantee** | All 155 discovered tests are permanent product contracts. No test may be deleted, commented out, or bypassed. | Masked regressions, degraded product quality, silent feature loss. |
-| **11**| **Non-Blocking Background Listening** | Audio ingestion runs on a dedicated background thread (`_listener_worker`), never blocked by action execution. | Dropped speech, microphone lag, user inability to issue commands. |
-| **12**| **Safe Application Process Boundaries** | Normal `AppController.close()` terminates only LIGHT-tracked launches. Image-wide `taskkill /F` or `pkill` requires an explicit `force=True` opt-in and is never used by normal browser close routing. | Accidental closure of personal tabs, documents, or unsaved work. |
-| **13**| **Read-Only Database Ingestion** | `HandyVoiceProvider` opens SQLite in read-only URI mode (`file:{path}?mode=ro`) with strict timeouts. | Locking conflicts with external Handy STT process, dropping live audio. |
-| **14**| **Background Agent Worker Isolation** | `AGENT_TASK` executes on managed `LIGHT-AgentWorker` thread; duplicates are rejected (`REJECTED`); thread is joined within bounded timeout on STOP or shutdown. | Consumer loop stalled for minutes; duplicate browser sessions and CPU starvation. |
-| **15**| **Cross-Platform OS Boundaries** | Platform-specific interactions (AppleScript, Win32, POSIX) are strictly isolated in `PlatformController`. High-level core never invokes OS binaries directly. | Fragile cross-platform regressions, broken builds, security leaks. |
-| **16**| **Local Agent Privacy Defaults** | Before Browser Use is imported, LIGHT selects `.light_browseruse/` for its config and defaults anonymized telemetry and cloud sync to disabled. | Local usage metadata or configuration leaking outside LIGHT's intended boundary. |
-
----
-
-## 2. Emergency Interruption & Preemption Protocol
-
-LIGHT guarantees user sovereignty through an out-of-band preemption architecture:
+## STOP and cancellation
 
 ```text
-Spoken: "Stop"
-      │
-      ▼
-Dedicated Voice Listener Thread
-      │
-      ├────────────────────────────────────────────────────────┐
-      ▼ (<1ms after ingestion)                                 ▼ (<2ms after ingestion)
-is_explicit_stop_or_cancel() == True              command_queue.cancel_event.set()
-      │                                                        │
-      ▼                                                        ▼
-Enqueue CommandPriority.STOP                      Interrupt Active Workers:
-      │                                           ├── Interrupt WAIT loops
-      ▼                                           ├── Abort & join LIGHT-AgentWorker
-Immediate Consumer Dispatch                       └── Prune pending normal queue
-      │
-      ▼
-Reset BrowserOwnership -> NONE
+spoken STOP -> STT/VAD -> provider publication -> listener poll
+                                                   |
+                                                   v
+                                           ingest_text("Stop")
+                                                   |
+                         immediate cancel_event.set + queue preemption
+                                                   |
+                         cooperative interruption / STOP execution / cleanup
 ```
 
-### Preemption Verification Requirements
-- Every blocking loop (`time.sleep`, polling loops, browser element waits, agent steps) must periodically inspect `cancel_event.is_set()` or accept `cancel_event` as a parameter.
-- The processing time from `ingest_text("Stop")` receiving the transcription to `cancel_event` being set must remain under **5 milliseconds**. With Handy polling at 150ms, end-to-end latency from spoken-word completion can be up to one polling interval plus STT/database publication time; this is a documented measurement boundary, not a claim of sub-5ms audio recognition.
+The measurable fast path is the second line: explicit phrase detection and
+event signaling after ingestion. End-to-end voice latency includes external STT
+and up to a polling interval. Active work responds according to its design:
 
----
+- `WAIT` waits directly on the cancellation event;
+- named-destination navigation polls the event every 10ms;
+- Browser Use has a 10ms async poller and calls `agent.stop()`/task cancel;
+- STOP joins the worker for up to 200ms before continuing cleanup;
+- some Playwright, OS, and third-party calls do not inspect the event while
+  blocked and therefore cannot promise immediate interruption.
 
-## 3. Search Relevance & Verification Policies
+Do not document “all automation aborts within 5ms.” The enforced contract is
+fast cancellation signaling, queue preemption, and cooperative cleanup.
 
-### The "Never Blindly Click Result #1" Rule
-Historically, when a user asked to `"open official repository"` or `"click official docs"`, legacy systems clicked the first link in the search results container. If the first result was an ad, an unrelated math paper, or a forum discussion, the assistant navigated to the wrong page.
+## Browser and webpage safety
 
-**Enforced Policy**:
-1. When target semantics imply a specific entity (e.g. `official`, `repository`, `docs`, `website`), visible anchor elements in the viewport are scored:
-   $$\text{Score} = \text{DomainMatch}(+120) + \text{RepoSlugMatch}(+80) + \text{SemanticMatch}(+50) + \text{QueryTokens}(+30) - \text{Penalty}(-100)$$
-2. If no candidate achieves $\ge 20$ points, `BrowserController` **must fail with `RuntimeError`**.
-3. It is strictly forbidden to fall back to `nth_result(1)` for named search targets.
+Browser page text is untrusted. Deterministic commands do not turn page content
+into new desktop actions. Qwen planning is based on the user's request and
+validated against a fixed action vocabulary; Browser Use may observe webpage
+content inside its isolated session, but it has no LIGHT shell action.
 
-### Post-Click Destination Verification
-Even a high-scoring link may redirect to an authentication barrier, a 404 page, or a deprecation notice.
-- After every named result navigation, `verify_destination()` executes:
-  - Validates that the URL changed from the pre-click page.
-  - Validates that the active URL is not an unexpected third-party domain.
-  - Validates that the active page title or header text contains core query tokens.
-  - If a mismatch is detected, the executor raises `RuntimeError("Semantic verification failed")`.
+Named targets such as “official repository” are scored using visible link text,
+href/domain, query tokens, and semantic hints. A candidate below the threshold
+is rejected. After clicking, the controller requires an active browser, a URL
+different from the pre-click URL, and semantic URL/title/body evidence. These
+are relevance checks, not malware, authenticity, or reputation guarantees.
 
----
+Arbitrary URLs accepted by the deterministic parser are navigable when they
+pass URL normalization. LIGHT does not currently implement a domain allowlist,
+blocklist, Safe Browsing check, or confirmation prompt. Users should treat
+unknown URLs and webpage-driven autonomous goals as potentially hostile.
 
-## 4. Input & Keystroke Safety Guards
+## LLM safety boundary
 
-### Foreground Process Checking
-Before sending synthetic keystrokes via PyAutoGUI:
-1. `ScreenController.get_foreground_window_info()` retrieves the active window title and process name across Windows (Win32) and macOS (AppleScript).
-2. If the user issued a command targeting a specific application (e.g. `"type in notepad"`), the system confirms that the foreground process matches the expected target.
-3. If no target application is specified, the system confirms that a valid, non-system window is active.
-4. If the active window is desktop, taskbar, or unverified, typing is aborted with an error log.
+The Ollama planner cannot emit actions outside `Action`; there is no shell,
+filesystem, package-install, credential, or arbitrary-process action. STOP is
+accepted only when the raw user text is explicit. Known applications are
+allowlisted and URL-like targets are validated.
 
----
+This validation does not make model output inherently trusted. Actions such as
+typing user-provided text, clicking named elements, or visiting a valid URL can
+still have consequences. Focus checks, browser verification, scoped process
+rules, and user STOP authority remain required.
 
-## 5. Process Lifecycle & System Safety
+## Desktop and process safety
 
-### Process Kill Scope
-- System utilities like `taskkill /F /IM brave.exe` or `taskkill /F /IM chrome.exe` are **strictly forbidden** during normal operation.
-- Closing an application via normal `AppController.close()` must only terminate processes explicitly spawned by LIGHT. On macOS, a graceful AppleScript quit is permitted only after LIGHT recorded the corresponding launch because `open -a` returns a short-lived launcher process.
-- Image-wide termination is permitted only through an explicit `force=True` API call; ordinary executor routing never opts into it.
-- The user's external browser instances, personal tabs, and unsaved documents must never be terminated.
+- Typing checks the foreground target immediately before dispatch, but a focus
+  race remains possible after the check.
+- Normal app close terminates tracked `Popen` instances. On macOS, a graceful
+  AppleScript quit is allowed only after a tracked `open -a` launch because the
+  launcher process exits early.
+- Broad `taskkill /IM`, `pkill -f`, or equivalent commands require explicit
+  `force=True`. The executor's normal close path does not opt in.
+- Single-instance startup may terminate stale `main.py` process trees using
+  platform commands while protecting the current process and parent shim.
+- Physical cursor/click verification checks coordinates and selected UI state;
+  it cannot guarantee the absence of OS overlays or last-moment focus changes.
 
----
+## Privacy and data handling
 
-## 6. Platform Abstraction & Isolation
+- Handy audio processing and database publication occur in the external Handy
+  application; LIGHT reads transcript text only.
+- Qwen/Laya inference is local by default. Ollama's endpoint is configurable,
+  so a non-local override changes that privacy boundary.
+- Browser Use configuration is repository-local by default, with optional
+  telemetry and cloud sync disabled unless the environment overrides them.
+- Runtime logs can contain spoken commands, URLs, errors, and timings. They are
+  ignored by Git and must not be committed without review/redaction.
+- `.env`, browser profiles, and caches are ignored because they may contain
+  secrets or session data.
+- Websites receive normal browser traffic and any information a requested task
+  submits. LIGHT does not provide a privacy sandbox for the public web.
 
-### Platform-Isolated Desktop Control
-1. Desktop interactions must strictly flow through `PlatformController` (`computer/platform_factory.py`).
-2. Win32-specific APIs (`ctypes.windll`, `user32`, `pygetwindow`) and PowerShell commands must remain strictly encapsulated within `WindowsPlatformController`.
-3. macOS-specific automation (`osascript`, AppleScript, `open -a`, POSIX signals) must remain strictly encapsulated within `MacOSPlatformController`.
-4. Shared core modules (`core/`, `brain/`, `browser/`) must never execute direct platform-specific system calls or hardcode platform binary paths.
-5. In environments where speech ingestion is unavailable (e.g. unverified Handy availability on macOS), `UnavailableVoiceProvider` safely idles without crashing or throwing unhandled errors.
+## Platform and validation limits
+
+Windows/macOS CI exercises shared code and a real local Playwright page.
+Platform unit tests mock many OS calls. The repository does not record physical
+macOS validation of microphone/Handy, Accessibility, Screen Recording, Retina,
+or mixed-DPI monitors. Host smoke tests are opt-in and non-destructive.
+
+Any change that expands URL trust, process scope, LLM actions, OS subprocesses,
+or unverified clicks requires explicit safety review and regression coverage.

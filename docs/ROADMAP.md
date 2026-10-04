@@ -1,85 +1,66 @@
-# LIGHT — Product & Engineering Roadmap
+# LIGHT Roadmap
 
-> **Status Notice**: This roadmap documents the architectural progression of **LIGHT**. Completed items reflect verified functionality in the repository. Planned items represent agreed engineering priorities without rigid deadlines.
+This roadmap separates released work from current risks and future ideas. A
+checked item means source plus automated evidence exists; it does not imply
+physical validation on every supported host.
 
----
+## Released in `v0.5.0`
 
-## 1. Completed Milestones
+- [x] deterministic-first command routing with guarded Laya and optional local
+  Qwen planning;
+- [x] background transcript listener and STOP-priority producer/consumer queue;
+- [x] plan-scoped dependent cancellation and thread-safe planning state;
+- [x] deterministic Playwright browser with candidate ranking, physical click
+  handling, clipboard read-back, and named-destination verification;
+- [x] Browser Use isolation and one non-blocking `LIGHT-AgentWorker`;
+- [x] atomic agent admission and ownership preservation;
+- [x] Windows/macOS `PlatformController` and `VoiceInputProvider` boundaries;
+- [x] tracked-process-only normal app close;
+- [x] local/private Browser Use defaults;
+- [x] 155-test Windows/macOS CI baseline and opt-in host smoke suites;
+- [x] consolidated engineering documentation and source-of-truth map.
 
-### Foundation & Core Assistant (Phase 1)
-- [x] Ambient voice loop polling local Handy SQLite `history.db`.
-- [x] High-performance deterministic intent parsing (`brain/decision.py`) covering 25+ actions in <1ms.
-- [x] Strict prefix-guarded machine learning fallback via `Laya` with casual speech rejection.
-- [x] Playwright-based browser automation (Chromium/Chrome) with DPI-aware viewport mapping.
-- [x] Windows application management (`Notepad`, `Calculator`, `Brave`, `Chrome`) with safe process handling.
-- [x] Precision mouse controller with relative pixel nudges, screen anchor homing, and physical clicking.
-- [x] Inclusive text range copying (`copy_text_range`) with DOM highlight cleanup.
+## Current hardening priorities
 
-### Producer-Consumer Queue & Intelligence (Phase 2)
-- [x] Thread-safe `CommandQueue` separating background voice polling (150ms) from action execution.
-- [x] Monotonic transcription ID tracking (`get_transcriptions_since`) eliminating dropped utterances.
-- [x] Emergency `STOP` ingestion preemption delivering <5ms cancellation signaling after transcription receipt (voice polling/STT measured separately).
-- [x] Dependent queued action pruning on prerequisite failure (`cancel_dependent_after_failure`).
-- [x] Local Qwen3 1.7B LLM integration via Ollama (`http://127.0.0.1:11434`) for multi-clause goal planning.
-- [x] Deterministic plan normalization and token filtering (`<think>`, `/no_think`).
-- [x] Google reCAPTCHA `/sorry/` detection with automatic DuckDuckGo fallback.
+1. **Resolve optional dependency metadata conflict** — select a compatible
+   Browser Use/Laya/Hugging Face set and validate agent behavior before changing
+   pins.
+2. **Broaden cancellation coverage** — identify blocking Playwright/OS calls
+   that can accept timeouts or cancellation without harming deterministic
+   latency.
+3. **Physical macOS validation** — exercise permissions, Handy/unavailable
+   voice, clipboard, window focus, Retina coordinates, application lifecycle,
+   STOP, and cleanup on actual hardware; record environment and outcomes.
+4. **Mixed-DPI multi-monitor validation** — define coordinate spaces and test
+   heterogeneous display scale factors on both operating systems.
+5. **Clipboard integration reliability** — distinguish unavailable/locked host
+   clipboards from product regressions without weakening verification.
 
-### Desktop Controls & Browser Workflow Reliability (Phase 3)
-- [x] Subordinate autonomous web agent (`AutonomousBrowserAgent`) using Browser Use and local Ollama.
-- [x] Event-loop-safe async agent execution (`execute_task`) preventing event loop conflicts.
-- [x] Three-state browser ownership model (`NONE`, `LIGHT`, `AGENT`) preventing controller collisions.
-- [x] Concurrent desktop commands (`OPEN_APP`, `HOTKEY`, `TYPE`, `MEDIA_*`) while agent browses in background.
-- [x] Managed background agent worker (`LIGHT-AgentWorker` in `core/executor.py`) decoupling long-running `AGENT_TASK` from the consumer loop with duplicate task protection and bounded join.
-- [x] GitHub repository search integration (`search_github`) and search results container detection.
-- [x] Multi-feature search candidate scoring (+120 domain, +80 slug, +50 target) prioritizing official repos.
-- [x] Semantic post-click destination verification (`verify_destination`) preventing false success reports.
-- [x] Foreground-aware typing with window focus inspection (`computer/screen.py`).
-- [x] Windows window state controls (minimize, maximize, restore, switch) and media playback keys.
-- [x] Comprehensive test suite expansion to 127 discovered tests (123 passed, 4 opt-in skipped).
+## Near-term improvements
 
-### Cross-Platform Architecture & macOS Support (Phase 4)
-- [x] Abstract `PlatformController` interface separating OS primitives from high-level desktop and process orchestration.
-- [x] Extensible `VoiceInputProvider` architecture (`voice/base.py`, `voice/handy_provider.py`, `voice/unavailable_provider.py`, `voice/factory.py`) with graceful fallback when voice input is unconfigured.
-- [x] Native `WindowsPlatformController` preserving 100% of existing Win32, ctypes, and PowerShell behavior.
-- [x] Native `MacOSPlatformController` supporting application launching (`open -a`), AppleScript window management (`osascript`), POSIX process management, and platform modifier mappings (`ctrl` $\to$ `cmd`).
-- [x] Cross-platform configuration with platform-aware browser and database path resolution.
-- [x] GitHub Actions CI matrix running automated test discovery on both `windows-latest` and `macos-latest`.
-- [x] Expanded automated test discovery suite to 145 tests (137 passed, 8 opt-in skipped, 0 failures, 0 errors).
+- [ ] retry an alternative ranked candidate after a verified named destination
+  fails;
+- [ ] scan below the initial viewport safely before declaring no named target;
+- [ ] add deterministic multi-tab selection and state coordination;
+- [ ] expand known-app discovery without introducing arbitrary shell execution;
+- [ ] add a small local status surface for listening/executing/agent/cancelled;
+- [ ] improve completed-agent result delivery beyond log/state inspection;
+- [ ] add hermetic dependency resolution and `pip check` to an explicit CI
+  policy once the conflict is resolved.
 
----
+## Exploratory, not committed
 
-## 2. Current Hardening Focus
+- [ ] direct in-process local Whisper/VAD provider;
+- [ ] local vision grounding for non-DOM desktop controls;
+- [ ] optional local text-to-speech feedback;
+- [ ] offline documentation indexing.
 
-### Engineering Memory, CI & Stability (Active Phase)
-- [x] Professional AI coding agent contract (`AGENTS.md`) and operational invariants.
-- [x] Comprehensive system architecture, product specification, and decision records under `docs/`.
-- [x] Windows GitHub Actions CI workflow running full unit and Playwright integration discovery suite.
-- [x] Clean logs directory management (`logs/.gitkeep`) and `.gitignore` hygiene.
-- [x] Deep hardening of compound-plan cancellation, agent admission/state transitions, semantic navigation verification, clipboard verification, and scoped application shutdown.
-- [x] Local/private Browser Use defaults and expanded discovery baseline to 155 tests (147 passed, 8 opt-in skipped on Windows).
-- [ ] Resolve the installed metadata conflict between `browser-use==0.13.10` (`click==8.3.3`) and the current `huggingface-hub` required by Laya (`click>=8.4.2,<9`) before consolidating optional agent dependencies into one resolver transaction.
-- [ ] Automated retry loop on alternative search candidates when initial semantic verification fails.
-- [ ] Dynamic viewport scrolling during candidate ranking to inspect results below the initial fold.
+## Explicit non-goals
 
----
-
-## 3. Planned Near-Term Improvements
-
-### Desktop & Multi-Monitor Refinements
-- [ ] **Multi-Monitor DPI Normalization**: Extend coordinate mapping and screen homing across heterogeneous multi-monitor setups with varying scale factors (e.g. 150% laptop + 100% external monitor).
-- [ ] **Dynamic Windows App Launcher**: Support launching unindexed installed Windows applications via Start Menu search indexing.
-- [ ] **System Tray & Hotkey Status**: Lightweight desktop overlay indicating active state (`LISTENING`, `EXECUTING`, `AGENT_RUNNING`, `PAUSED`).
-
-### Browser & Search Enhancements
-- [ ] **Browser Use Step Tuning**: Fine-tune Browser Use step budgets and schema validation for local CPU execution.
-- [ ] **Multi-Tab Session Coordination**: Allow deterministic tab switching and cross-tab query propagation.
-- [ ] **Direct Documentation Indexing**: Offline quick-reference lookup for common programming frameworks.
-
----
-
-## 4. Future / Exploratory Directions
-
-### Standalone Speech & Local Vision
-- [ ] **In-Process Whisper VAD**: Embed local Whisper voice activity detection directly within LIGHT, removing reliance on external Handy installations.
-- [ ] **Local Vision UI Grounding**: Investigate compact local vision-language models (e.g. Qwen2-VL) for visual bounding-box grounding on complex non-web desktop user interfaces.
-- [ ] **Voice Feedback (TTS)**: Optional local text-to-speech confirmation for completed research tasks.
+- mandatory cloud models, telemetry, analytics, or user tracking;
+- arbitrary LLM-generated shell commands;
+- weakening STOP, focus, process, click, clipboard, or destination checks for
+  convenience;
+- replacing the deterministic parser with an LLM-first architecture;
+- claiming Linux support from the current fallback code;
+- treating mocked or hosted-runner tests as physical-hardware certification.

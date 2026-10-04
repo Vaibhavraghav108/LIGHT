@@ -1,153 +1,110 @@
-# AGENTS.md — AI Engineering Contract & Operating Guidelines
+# AGENTS.md — LIGHT Engineering Contract
 
-> **CRITICAL CONTRACT**: This file is the primary developer and AI agent contract for working in the **LIGHT** repository. Any AI agent, coding assistant, or engineer modifying this codebase must read, understand, and strictly abide by the rules, architectural invariants, and verification procedures defined herein.
+This is the binding contributor and AI-agent contract for LIGHT. Read it before
+changing the repository. Code and tests are the behavioral authority; the
+documentation map is [docs/README.md](docs/README.md).
 
----
+## Product and architecture contract
 
-## 1. Project Identity
-
-**LIGHT** is a production-grade, local-first, voice-controlled desktop and browser automation assistant supporting Windows and macOS.
-
-- **Primary Goal**: Deliver instantaneous, hands-free computer and browser control using ambient, continuous voice dictation without requiring cloud APIs, subscription keys, or heavyweight cognitive overhead.
-- **Product Classification**: Low-latency desktop utility and browser copilot combining deterministic parsing (<1ms) with local small language models (Qwen3 1.7B via Ollama) and an isolated autonomous web agent (Browser Use).
-- **Core Philosophy**:
-  - **Local-First & Private**: Voice audio, transcriptions, LLM inference, and browser automation run entirely on the local machine.
-  - **Speed as a Feature**: Common commands execute deterministically in milliseconds; background listening never halts or stutters during execution.
-  - **Fail-Safe & Verifiable**: Physical actions (typing, clicking, navigating) are verified before success is reported. Emergency `STOP` preemption guarantees that the user retains absolute control at all times.
-
----
-
-## 2. Current Architecture Overview
-
-LIGHT operates as a multi-tier producer-consumer automation pipeline:
+LIGHT is a local-first, low-latency desktop and browser automation assistant
+for Windows and macOS. Preserve this pipeline:
 
 ```text
-Physical Voice Input
-        │
-        ▼
-Handy Desktop App (Local STT & VAD) ──► SQLite `history.db`
-                                             │
-┌────────────────────────────────────────────┘
-▼
-Dedicated Voice Listener Thread (`core/loop.py::_listener_worker`)
-        │ (non-blocking polling @ 150ms + debouncing)
-        ▼
-Thread-Safe Command Queue (`core/queue_manager.py`)
-        │ (preemption check: STOP/CANCEL -> priority queue)
-        ▼
-Decision Engine / Brain (`brain/laya.py`, `brain/decision.py`)
-        ├── 1. Multi-step deterministic parser (<1ms)
-        ├── 2. Single-step deterministic parser (<1ms)
-        ├── 3. Local Qwen3 1.7B Planner via Ollama (`brain/llm.py`)
-        ├── 4. Complex deterministic search fallback
-        └── 5. Laya intent classifier (strict prefix-guarded fallback)
-        │
-        ▼
-Executor Pipeline (`core/executor.py`)
-        ├── Desktop Subsystem (`computer/apps.py`, `keyboard.py`, `mouse.py`, `screen.py`)
-        ├── Deterministic Browser (`browser/browser.py` via Playwright Chromium)
-        └── Autonomous Web Agent (`browser/agent.py` via Browser Use + Ollama)
-        │
-        ▼
-Observation & Verification
-        ├── Window focus & foreground verification
-        ├── Candidate ranking (text, href, domain, official semantics)
-        └── Post-click semantic destination verification
+VoiceInputProvider -> LIGHT-VoiceListener -> CommandQueue -> Laya/brain
+                   -> Executor -> desktop / Playwright / Browser Use
+                   -> verification -> LightState
 ```
 
-For the exhaustive technical specification, data flow diagrams, and component dependencies, consult [`docs/ARCHITECTURE.md`](file:///c:/Projects/LIGHT/docs/ARCHITECTURE.md).
+The responsibilities are deliberately separate:
 
----
+- deterministic parsing handles common commands without an LLM;
+- Laya is the guarded final intent-classification fallback;
+- Qwen3 1.7B through local Ollama plans complex structured commands;
+- Playwright owns deterministic browser actions;
+- Browser Use handles open-ended autonomous web goals in an isolated session;
+- `PlatformController` contains operating-system primitives;
+- `VoiceInputProvider` contains provider-specific transcription ingestion.
 
-## 3. Core Engineering Principles
+## Non-negotiable invariants
 
-Every engineer and AI assistant modifying LIGHT must honor these seventeen foundational principles:
+1. Preserve existing behavior and prefer the smallest safe change.
+2. Do not rewrite working subsystems for style.
+3. Keep deterministic commands deterministic and free of network/LLM calls.
+4. Keep `_listener_worker` separate from command execution.
+5. STOP/CANCEL must set cancellation directly at ingestion and retain priority.
+   The measured sub-5ms contract begins at `ingest_text()`, not at speech.
+6. Long-running code must observe cancellation. Do not claim every third-party
+   call is instantly cancellable.
+7. Keep `AGENT_TASK` on the managed `LIGHT-AgentWorker`; it must not block the
+   normal consumer loop.
+8. Keep Browser Use and Playwright sessions isolated. Preserve truthful
+   `BrowserOwnership` until the agent worker actually exits.
+9. Never equate dispatch with success. Preserve focus, click, clipboard, and
+   destination verification.
+10. Named browser targets must be ranked and may not silently fall back to the
+    first result.
+11. LLM output is untrusted. Validate actions, applications, URLs, targets, and
+    STOP intent before execution. Never add an arbitrary shell action.
+12. Normal application close may affect only LIGHT-tracked processes. A broad
+    force close requires explicit API opt-in and must never be normal routing.
+13. Desktop OS operations belong behind `PlatformController`.
+14. Voice-provider behavior belongs behind `VoiceInputProvider`.
+15. Keep local-first defaults: no mandatory cloud API, telemetry, analytics, or
+    tracking. Web automation still communicates with sites the user requests.
+16. Do not delete, skip, weaken, or rewrite tests merely to make CI green.
+17. Add deterministic regression coverage for each bug fix.
+18. Preserve the Windows/macOS CI matrix and platform markers.
+19. Never commit `.env`, secrets, runtime logs, browser profiles, caches, or
+    machine-specific paths.
+20. Never force-push, amend published history, or destructively reset user work.
+21. Report exactly what was run. Separate mocked tests, local-browser tests,
+    CI results, opt-in host smoke tests, and physical-device validation.
 
-1. **Preserve Existing Functionality**: LIGHT is an active, working product. Never break, remove, or degrade existing capabilities.
-2. **Prefer Incremental, Minimal Changes**: Always make the smallest safe change that accomplishes the goal. Avoid sprawling diffs.
-3. **Avoid Unnecessary Rewrites**: Do not redesign or replace core systems merely because you would have implemented them differently.
-4. **Keep Deterministic Paths Deterministic**: High-frequency commands (`"open youtube"`, `"scroll down"`, `"press enter"`, `"click search bar"`) must execute deterministically in <1ms without involving an LLM.
-5. **Justify LLM Usage**: The local Qwen3 1.7B planner is reserved for complex, multi-clause natural language search and navigation instructions. Never route simple commands to the LLM.
-6. **Low Latency is a First-Class Requirement**: Ingestion to execution must feel instantaneous. Audio polling must never be blocked by downstream execution.
-7. **Continuous Listening is Non-Negotiable**: The background voice ingestion thread (`_listener_worker`) must remain decoupled from synchronous or asynchronous action execution.
-8. **STOP / CANCEL Has Absolute Priority**: When a user says `"Stop"`, `"Cancel"`, or `"Exit"`, any running browser task, wait interval, or queued action must abort within <5ms.
-9. **Never Claim Success Without Verification**: A dispatched mouse click or key press is not proof of success. Elements must be verified in viewport, foreground windows must be confirmed, and landing URLs must match expected semantics.
-10. **Browser Targets Must Never Be Blindly Clicked**: Ambiguous or named result requests (`"click official repository"`, `"open docs"`) must rank visible candidate links using semantic relevance scoring and fail safely if confidence is low.
-11. **Browser Use Must Respect Browser Ownership**: Browser Use runs in an isolated session under `BrowserOwnership.AGENT` and must never corrupt or conflict with LIGHT's primary Playwright session (`BrowserOwnership.LIGHT`).
-12. **Existing Tests Are the Product Contract**: All unit and integration tests represent hard product requirements. Tests must never be deleted, commented out, or weakened to make a build pass.
-13. **Critical Workflows Require Regression Tests**: Whenever a bug is discovered or an edge case is hardened, an accompanying regression test must be added to the test suite.
-14. **Validate Critical Execution Paths**: Changes affecting `core/loop.py`, `core/queue_manager.py`, `core/executor.py`, or `browser/browser.py` require end-to-end testing across both synchronous and asynchronous modes.
-15. **Preserve Local-First Behavior**: LIGHT must function completely offline (or over localhost Ollama). Never introduce mandatory cloud APIs or remote telemetry.
-16. **Do Not Add Cloud Dependencies Casually**: Keep core dependencies lean. Do not add OpenAI, Anthropic, or external cloud SDKs to default execution paths.
-17. **Autonomous Agent Tasks Must Not Block Normal Command Execution**: Long-running exploratory research tasks (`AGENT_TASK`) must execute on a managed background worker (`LIGHT-AgentWorker`). The consumer loop must return immediately and process subsequent desktop and browser commands without waiting for agent completion.
-18. **Honor Platform Abstraction Boundaries**: Desktop and operating system interactions must flow through `PlatformController` (`computer/platform_factory.py`). Never introduce OS-specific calls (e.g. Win32 `ctypes`, AppleScript `osascript`, `taskkill`) directly into shared core logic.
+## Before editing
 
----
+1. Run `git status --short --branch`, identify HEAD/origin, and stop if the
+   worktree contains changes you do not own.
+2. Read this contract and the relevant canonical documents:
+   [ARCHITECTURE](docs/ARCHITECTURE.md), [SAFETY](docs/SAFETY.md),
+   [DECISIONS](docs/DECISIONS.md), [TESTING](docs/TESTING.md), and
+   [TROUBLESHOOTING](docs/TROUBLESHOOTING.md).
+3. Inspect relevant source, tests, history, and configuration. Unusual code may
+   encode a prior race, safety constraint, platform behavior, or CI fix.
+4. Establish the relevant test baseline before modification.
+5. Create a focused branch; do not work directly on `main`.
+6. Plan the smallest behavior-preserving change and its regression test.
 
-## 4. Before Modifying Code
+## Verification after editing
 
-Before writing a single line of code or editing an existing file, follow this protocol:
+Run targeted tests first, then the complete checks appropriate to the change:
 
-1. **Read This Document (`AGENTS.md`)**: Ensure you are aligned with project constraints and invariants.
-2. **Read Relevant System Documentation**:
-   - Technical Architecture: [`docs/ARCHITECTURE.md`](file:///c:/Projects/LIGHT/docs/ARCHITECTURE.md)
-   - Safety & Invariants: [`docs/SAFETY.md`](file:///c:/Projects/LIGHT/docs/SAFETY.md)
-   - Testing Guide: [`docs/TESTING.md`](file:///c:/Projects/LIGHT/docs/TESTING.md)
-   - Historical Decisions: [`docs/DECISIONS.md`](file:///c:/Projects/LIGHT/docs/DECISIONS.md)
-   - Solved Issues: [`docs/TROUBLESHOOTING.md`](file:///c:/Projects/LIGHT/docs/TROUBLESHOOTING.md)
-3. **Inspect the Live Repository**: Check current files and Git history (`git status`, `git log -n 5`). Code in the repository is the final source of truth.
-4. **Identify Affected Components**: Map out inbound and outbound dependencies.
-5. **Identify and Run Existing Tests**: Run relevant tests before making changes to establish a known clean baseline.
-6. **Formulate a Minimal Plan**: Plan the smallest possible safe modification.
+```powershell
+.\lightenv\Scripts\python.exe -m unittest discover -s tests -v
+.\lightenv\Scripts\python.exe -m compileall -q main.py config.py voice brain computer browser core utils tests
+git diff --check
+git status --short --branch
+```
 
----
+Changes to `core/loop.py`, `core/queue_manager.py`, `core/executor.py`, or
+`browser/browser.py` require synchronous and asynchronous path coverage plus
+cancellation/shutdown tests. OS changes require both platform unit coverage and
+the existing CI matrix. Real microphone, GUI, clipboard, and permissions checks
+remain opt-in host smoke tests.
 
-## 5. After Modifying Code
+Update documentation by ownership: behavior in `FEATURES`, architecture in
+`ARCHITECTURE`/`DECISIONS`, safety boundaries in `SAFETY`, test evidence in
+`TESTING`, fixed defects in `TROUBLESHOOTING`, release history in `CHANGELOG`,
+and future work in `ROADMAP`.
 
-After modifying code, complete the full verification and reporting cycle:
+## Current `v0.5.0` caveats
 
-1. **Add or Update Tests**: Ensure new behavior or bug fixes are covered by explicit regression tests.
-2. **Run Targeted Tests**: Verify the specific test classes directly affected by your changes.
-3. **Run the Full Test Discovery Suite**:
-   ```powershell
-   .\lightenv\Scripts\python.exe -m unittest discover -s tests -v
-   ```
-   Ensure zero failures, zero errors, and that only expected opt-in tests are skipped.
-4. **Update Documentation**:
-   - If user-facing or subsystem features changed, update [`docs/FEATURES.md`](file:///c:/Projects/LIGHT/docs/FEATURES.md).
-   - If an architectural decision or invariant was established, add an ADR to [`docs/DECISIONS.md`](file:///c:/Projects/LIGHT/docs/DECISIONS.md).
-   - If a new bug was diagnosed and resolved, record symptoms, root cause, and fix in [`docs/TROUBLESHOOTING.md`](file:///c:/Projects/LIGHT/docs/TROUBLESHOOTING.md).
-   - Always log meaningful milestones and changes in [`docs/CHANGELOG.md`](file:///c:/Projects/LIGHT/docs/CHANGELOG.md).
-5. **Inspect the Git Diff**: Run `git diff` and verify that no unintended edits, formatting churn, or leftover debugging statements exist in product files.
-6. **Report Honestly**: Disclose exact files changed, tests run, test outputs, and any observed risks or limitations. Never claim a test passed unless you executed it and observed the result.
+- macOS has unit and CI coverage, but physical Mac hardware/permission/voice
+  validation is not recorded.
+- Some Playwright calls and third-party Browser Use internals cannot guarantee
+  immediate cancellation; joins are bounded and a dependency may outlive them.
+- Mixed-DPI multi-monitor coordinates are not physically validated.
+- The optional agent install currently has a `click` metadata conflict between
+  `browser-use==0.13.10` and the installed Laya dependency chain.
 
----
-
-## 6. Forbidden Behavior
-
-The following actions are strictly prohibited in this repository:
-
-- ❌ **Deleting, skipping, or modifying existing assertions to make failing tests pass**.
-- ❌ **Disabling verification mechanisms** (such as bypassing `verify_destination`, skipping focus checks, or faking element coordinates).
-- ❌ **Silently changing architectural boundaries** (e.g. converting deterministic parsers into LLM prompts).
-- ❌ **Rewriting major modules** without explicit user consent.
-- ❌ **Introducing external cloud API requirements** or requiring API keys for core operation.
-- ❌ **Claiming tests passed or actions succeeded without running them**.
-- ❌ **Modifying unrelated subsystems** while working on an isolated bug fix or feature task.
-- ❌ **Force-pushing (`git push --force`)**, amending published commits, rewriting Git history, or destructively resetting branches.
-
----
-
-## 7. Documentation Directory Map
-
-Detailed project documentation is structured under the [`docs/`](file:///c:/Projects/LIGHT/docs/) directory:
-
-- [`docs/PRODUCT_SPEC.md`](file:///c:/Projects/LIGHT/docs/PRODUCT_SPEC.md) — What LIGHT is intended to be: product vision, user experience, and core requirements.
-- [`docs/ARCHITECTURE.md`](file:///c:/Projects/LIGHT/docs/ARCHITECTURE.md) — How LIGHT is built: comprehensive technical architecture, data flows, and component specs.
-- [`docs/FEATURES.md`](file:///c:/Projects/LIGHT/docs/FEATURES.md) — Comprehensive feature inventory, implementation status, and command examples.
-- [`docs/CHANGELOG.md`](file:///c:/Projects/LIGHT/docs/CHANGELOG.md) — Human-readable development milestones and categorized evolution history.
-- [`docs/DECISIONS.md`](file:///c:/Projects/LIGHT/docs/DECISIONS.md) — Architecture Decision Records (ADRs) detailing why critical decisions were made.
-- [`docs/ROADMAP.md`](file:///c:/Projects/LIGHT/docs/ROADMAP.md) — Current status, completed milestones, active hardening, and future directions.
-- [`docs/TESTING.md`](file:///c:/Projects/LIGHT/docs/TESTING.md) — Multi-tier test suite architecture, test execution commands, and critical workflows.
-- [`docs/SAFETY.md`](file:///c:/Projects/LIGHT/docs/SAFETY.md) — Safety invariants, preemption guarantees, verification rules, and failure modes.
-- [`docs/TROUBLESHOOTING.md`](file:///c:/Projects/LIGHT/docs/TROUBLESHOOTING.md) — Exhaustive guide to historical bugs, root causes, fixes, and regression tests.
+See [docs/TESTING.md](docs/TESTING.md) for the dated release baseline and
+[docs/SAFETY.md](docs/SAFETY.md) for precise guarantee boundaries.
