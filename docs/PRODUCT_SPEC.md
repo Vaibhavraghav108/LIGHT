@@ -6,7 +6,7 @@
 
 ## 1. Product Vision
 
-**LIGHT** is an ambient, voice-driven Windows and browser automation assistant engineered for instantaneous, hands-free computer interaction. It eliminates the friction of manual mouse-and-keyboard navigation by translating natural spoken commands into verified operating system and browser actions.
+**LIGHT** is an ambient, voice-driven desktop (Windows and macOS) and browser automation assistant engineered for instantaneous, hands-free computer interaction. It eliminates the friction of manual mouse-and-keyboard navigation by translating natural spoken commands into verified operating system and browser actions.
 
 ### Core Value Proposition
 - **Zero Cloud Dependence**: Operates completely on the local machine with no external audio transmission, subscription API keys, or cloud latency bottlenecks.
@@ -88,7 +88,7 @@
 | **Ingestion Latency** | Voice polling loop intervals $\le 150\text{ ms}$; parsing $\le 1\text{ ms}$. | Performance logging (`log_perf`). |
 | **Emergency Preemption** | STOP detection to cancellation event set $\le 5\text{ ms}$. | Dedicated cancellation unit tests. |
 | **Privacy & Security** | Zero external audio streaming; all processing local. | Architectural inspection & firewall isolation. |
-| **Platform Compatibility**| Windows 10/11 64-bit and macOS 13+ (Apple Silicon & Intel). | Cross-platform discovery test suite & smoke tests. |
+| **Platform Compatibility**| Windows 10/11 64-bit (fully hardware-validated) and macOS 13+ (architecturally supported; verified via unit tests and opt-in smoke suite). | Cross-platform discovery test suite & smoke tests. |
 | **Test Verification** | 100% pass rate across baseline test discovery suite. | Automated unittest discovery in CI. |
 | **False Positive Guard** | Zero accidental execution of casual speech or unrelated single words. | Safety validation tests (`test_laya.py`). |
 

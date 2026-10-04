@@ -80,7 +80,7 @@ Even a high-scoring link may redirect to an authentication barrier, a 404 page, 
 
 ### Foreground Process Checking
 Before sending synthetic keystrokes via PyAutoGUI:
-1. `ScreenController.get_foreground_window_info()` retrieves the active Win32 window title and process name.
+1. `ScreenController.get_foreground_window_info()` retrieves the active window title and process name across Windows (Win32) and macOS (AppleScript).
 2. If the user issued a command targeting a specific application (e.g. `"type in notepad"`), the system confirms that the foreground process matches the expected target.
 3. If no target application is specified, the system confirms that a valid, non-system window is active.
 4. If the active window is desktop, taskbar, or unverified, typing is aborted with an error log.
@@ -91,5 +91,16 @@ Before sending synthetic keystrokes via PyAutoGUI:
 
 ### Process Kill Scope
 - System utilities like `taskkill /F /IM brave.exe` or `taskkill /F /IM chrome.exe` are **strictly forbidden** during normal operation.
-- Closing an application via `AppController.close()` must only terminate PIDs explicitly spawned by LIGHT, or gracefully request closure via `WM_CLOSE` window messages.
+- Closing an application via `AppController.close()` must only terminate PIDs explicitly spawned by LIGHT, or gracefully request closure via `WM_CLOSE` window messages (or POSIX `kill` on macOS).
 - The user's external browser instances, personal tabs, and unsaved documents must never be terminated.
+
+---
+
+## 6. Platform Abstraction & Isolation
+
+### Platform-Isolated Desktop Control
+1. Desktop interactions must strictly flow through `PlatformController` (`computer/platform_factory.py`).
+2. Win32-specific APIs (`ctypes.windll`, `user32`, `pygetwindow`) and PowerShell commands must remain strictly encapsulated within `WindowsPlatformController`.
+3. macOS-specific automation (`osascript`, AppleScript, `open -a`, POSIX signals) must remain strictly encapsulated within `MacOSPlatformController`.
+4. Shared core modules (`core/`, `brain/`, `browser/`) must never execute direct platform-specific system calls or hardcode platform binary paths.
+5. In environments where speech ingestion is unavailable (e.g. unverified Handy availability on macOS), `UnavailableVoiceProvider` safely idles without crashing or throwing unhandled errors.

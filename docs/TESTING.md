@@ -154,6 +154,14 @@ Verifies that all Python modules compile cleanly without syntax errors:
   - Verifies live screen dimensions, cursor tracking, and active window titles.
   - Verifies non-destructive read access to the host's actual Handy `history.db`.
 
+### Tier 5: Opt-In macOS Host Smoke Tests (4 Tests)
+- **`tests/test_macos_smoke.py` (4 tests, skipped by default)**:
+  - Enabled exclusively when `LIGHT_RUN_MACOS_SMOKE="1"` on a physical or hosted macOS environment.
+  - Verifies macOS Google Chrome / Brave application bundle discovery.
+  - Verifies system clipboard write/read round-trip via `pyperclip`.
+  - Verifies screen dimensions and Retina display scale factor detection.
+  - Verifies voice provider initialization and graceful fallback behavior.
+
 ---
 
 ## 4. Critical Verification Workflows
