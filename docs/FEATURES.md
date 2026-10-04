@@ -8,11 +8,13 @@
 
 | Feature | Status | Description | Example Spoken Input | Source Files | Test Files |
 | :--- | :---: | :--- | :--- | :--- | :--- |
-| **Continuous Audio Ingestion** | `[x]` | Reads speech-to-text transcriptions from local Handy SQLite database (`history.db`) in read-only URI mode. | *(Continuous ambient speech)* | [`voice/handy.py`](file:///c:/Projects/LIGHT/voice/handy.py) | `tests/test_voice.py` |
-| **Monotonic ID Polling** | `[x]` | Tracks `transcription_history.id` to guarantee zero dropped utterances during fast speech. | *(Automatic background loop)* | [`voice/handy.py`](file:///c:/Projects/LIGHT/voice/handy.py) | `tests/test_voice.py` |
-| **Locked Database Resilience** | `[x]` | Gracefully catches `sqlite3.OperationalError: database is locked` and recovers without dropping state. | *(Handy writing during read)* | [`voice/handy.py`](file:///c:/Projects/LIGHT/voice/handy.py) | `tests/test_voice.py` |
+| **VoiceInputProvider Abstraction** | `[x]` | Decouples speech ingestion behind `VoiceInputProvider` interface with pluggable providers and graceful fallback. | *(System voice ingestion)* | [`voice/base.py`](file:///c:/Projects/LIGHT/voice/base.py), [`voice/factory.py`](file:///c:/Projects/LIGHT/voice/factory.py) | `tests/test_voice_provider.py` |
+| **Continuous Audio Ingestion** | `[x]` | Reads speech-to-text transcriptions from local Handy SQLite database (`history.db`) in read-only URI mode. | *(Continuous ambient speech)* | [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py), [`voice/handy.py`](file:///c:/Projects/LIGHT/voice/handy.py) | `tests/test_voice.py`, `tests/test_voice_provider.py` |
+| **Monotonic ID Polling** | `[x]` | Tracks `transcription_history.id` to guarantee zero dropped utterances during fast speech. | *(Automatic background loop)* | [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py) | `tests/test_voice.py` |
+| **Locked Database Resilience** | `[x]` | Gracefully catches `sqlite3.OperationalError: database is locked` and recovers without dropping state. | *(Handy writing during read)* | [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py) | `tests/test_voice.py` |
 | **Utterance Debouncing** | `[x]` | Debounces immediate duplicate transcriptions within cooldown window (1.0s) for non-repeatable actions. | *(Duplicate voice transcription)*| [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py) | `tests/test_voice.py` |
-| **Direct Local Whisper Integration** | `[ ]` | Standalone in-process Whisper VAD pipeline without requiring external Handy installation. | *(Planned standalone mode)* | — | — |
+| **Graceful Unavailable Fallback** | `[x]` | Operates cleanly with informative status when no voice provider is configured or available on the host OS. | *(Startup on host without Handy)* | [`voice/unavailable_provider.py`](file:///c:/Projects/LIGHT/voice/unavailable_provider.py) | `tests/test_voice_provider.py` |
+| **Direct Local Whisper Integration** | `[ ]` | Standalone in-process Whisper VAD pipeline without requiring external Handy installation on macOS/Windows. | *(Planned standalone mode)* | — | — |
 
 ---
 
@@ -43,14 +45,17 @@
 
 | Feature | Status | Description | Example Spoken Input | Source Files | Test Files |
 | :--- | :---: | :--- | :--- | :--- | :--- |
-| **Application Launch & Close** | `[x]` | Launches and cleanly closes supported Windows apps (`Notepad`, `Calculator`, `Brave`, `Chrome`). | `"Open Notepad"`, `"Close Notepad"` | [`computer/apps.py`](file:///c:/Projects/LIGHT/computer/apps.py) | `tests/test_computer.py` |
+| **PlatformController Abstraction**| `[x]` | Abstract OS interface encapsulating platform-specific processes, window management, and utilities. | *(OS-level dispatch)* | [`computer/platform_base.py`](file:///c:/Projects/LIGHT/computer/platform_base.py), [`computer/platform_factory.py`](file:///c:/Projects/LIGHT/computer/platform_factory.py) | `tests/test_platform_macos.py` |
+| **Windows Platform Controller** | `[x]` | Native Windows implementation using Win32, ctypes, and PowerShell CIM process queries. | *(Windows system controls)* | [`computer/platform_windows.py`](file:///c:/Projects/LIGHT/computer/platform_windows.py) | `tests/test_computer.py`, `tests/test_windows_smoke.py` |
+| **macOS Platform Controller** | `[x]` | Native macOS implementation using AppleScript (`osascript`), `open`, POSIX process signals, and Retina scaling. | *(macOS system controls)* | [`computer/platform_macos.py`](file:///c:/Projects/LIGHT/computer/platform_macos.py) | `tests/test_platform_macos.py`, `tests/test_macos_smoke.py` |
+| **Application Launch & Close** | `[x]` | Launches and cleanly closes supported apps (`Notepad`/`TextEdit`, `Calculator`, `Brave`, `Chrome`). | `"Open Notepad"`, `"Close Notepad"` | [`computer/apps.py`](file:///c:/Projects/LIGHT/computer/apps.py) | `tests/test_computer.py`, `tests/test_platform_macos.py` |
 | **Process Tree Protection** | `[x]` | Protects launcher shim PIDs and unrelated user instances during application close. | *(Closing LIGHT browser)* | [`computer/apps.py`](file:///c:/Projects/LIGHT/computer/apps.py) | `tests/test_computer.py` |
-| **Foreground Window Verification**| `[x]` | Inspects active foreground window and process title before executing typing actions. | *(Pre-typing verification)* | [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py) | `tests/test_new_features.py` |
-| **Keyboard Typing & Hotkeys** | `[x]` | Types text with focus checks; executes OS key combinations (`ctrl+c`, `alt+tab`). | `"Type Hello World"`, `"Press enter"`, `"Hotkey ctrl+v"` | [`computer/keyboard.py`](file:///c:/Projects/LIGHT/computer/keyboard.py) | `tests/test_computer.py`, `tests/test_new_features.py` |
+| **Foreground Window Verification**| `[x]` | Inspects active foreground window and process title before executing typing actions. | *(Pre-typing verification)* | [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py) | `tests/test_new_features.py`, `tests/test_platform_macos.py` |
+| **Keyboard Typing & Hotkeys** | `[x]` | Types text with focus checks; executes platform-mapped key combinations (`ctrl+c` / `cmd+c`). | `"Type Hello World"`, `"Press enter"`, `"Hotkey ctrl+v"` | [`computer/keyboard.py`](file:///c:/Projects/LIGHT/computer/keyboard.py) | `tests/test_computer.py`, `tests/test_platform_macos.py` |
 | **Media Playback Controls** | `[x]` | Controls media playback, volume, mute, and video seek offsets. | `"Pause video"`, `"Play"`, `"Mute"`, `"Volume up"`, `"Go back 10 seconds"` | [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py` |
-| **Window State Management** | `[x]` | Minimizes, maximizes, restores, and switches desktop application windows. | `"Minimize window"`, `"Maximize window"`, `"Switch window"` | [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py` |
+| **Window State Management** | `[x]` | Minimizes, maximizes, restores, and switches desktop application windows across Windows and macOS. | `"Minimize window"`, `"Maximize window"`, `"Switch window"` | [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py) | `tests/test_new_features.py`, `tests/test_platform_macos.py` |
 | **Precision Mouse Control** | `[x]` | Relative pixel nudges, screen anchor homing, semantic distances, and physical clicking. | `"Move mouse 100 pixels right"`, `"Move mouse slightly up"`, `"Click"` | [`computer/mouse.py`](file:///c:/Projects/LIGHT/computer/mouse.py) | `tests/test_computer.py` |
-| **Arbitrary Windows App Launch**| `[ ]` | Dynamic start menu discovery for launching any unindexed installed Windows application. | `"Open Spotify"`, `"Open Slack"` | — | — |
+| **Arbitrary Desktop App Launch**| `[ ]` | Dynamic discovery for launching any unindexed installed application. | `"Open Spotify"`, `"Open Slack"` | — | — |
 
 ---
 

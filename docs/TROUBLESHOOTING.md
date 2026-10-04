@@ -328,3 +328,33 @@ In [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py), `Executor.e
 - `tests/test_new_features.py::TestNewFeaturesIntegration::test_50_agent_worker_failure_resets_state`
 - `tests/test_new_features.py::TestNewFeaturesIntegration::test_51_async_loop_executes_normal_command_while_agent_runs`
 - `tests/test_new_features.py::TestNewFeaturesIntegration::test_52_interleaved_desktop_and_browser_commands_during_agent_task`
+
+---
+
+## Issue 12 — Missing Voice Provider on Non-Windows Hosts (macOS)
+
+### Problem
+Starting LIGHT on macOS or a machine without Handy installed caused an immediate `FileNotFoundError` during `Handy.__init__()` when trying to open `%APPDATA%\com.pais.handy\history.db`.
+
+### Symptoms
+```text
+FileNotFoundError: Handy database not found:
+/Users/.../Library/Application Support/com.pais.handy/history.db
+```
+
+### Root Cause
+`main.py` directly instantiated `Handy()`, which strictly asserted that the SQLite database file existed on disk. On macOS hosts where Handy was uninstalled or unverified, this crashed the process on launch.
+
+### Fix
+1. Abstracted speech ingestion into `VoiceInputProvider` (`voice/base.py`).
+2. Implemented `voice/factory.py:get_voice_provider()`:
+   - If the Handy database exists at the platform-appropriate location, instantiates `HandyVoiceProvider`.
+   - If the database is missing, returns an `UnavailableVoiceProvider` with an informative status message instead of crashing.
+3. Updated `LightLoop` to inspect `voice_provider.is_available()`, logging a clear diagnostic warning and keeping the voice listener idle without throwing errors.
+
+### Relevant Files
+- [`voice/base.py`](file:///c:/Projects/LIGHT/voice/base.py), [`voice/factory.py`](file:///c:/Projects/LIGHT/voice/factory.py), [`voice/unavailable_provider.py`](file:///c:/Projects/LIGHT/voice/unavailable_provider.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py), [`main.py`](file:///c:/Projects/LIGHT/main.py)
+
+### Regression Test
+- `tests/test_voice_provider.py::TestVoiceProviders::test_factory_returns_unavailable_when_db_missing_without_crashing`
+- `tests/test_voice_provider.py::TestVoiceProviders::test_unavailable_provider_behavior`

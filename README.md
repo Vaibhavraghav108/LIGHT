@@ -1,68 +1,61 @@
-# LIGHT — Voice-Controlled Windows & Browser Automation Assistant
+# LIGHT — Voice-Controlled Desktop & Browser Automation Assistant
 
 [![LIGHT CI](https://github.com/Vaibhavraghav108/LIGHT/actions/workflows/tests.yml/badge.svg)](https://github.com/Vaibhavraghav108/LIGHT/actions/workflows/tests.yml)
-[![Tests: 123 Passed](https://img.shields.io/badge/Tests-123%20passed-brightgreen.svg)](docs/TESTING.md)
-[![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-blue.svg)](docs/PRODUCT_SPEC.md)
+[![Tests: 137 Passed](https://img.shields.io/badge/Tests-137%20passed-brightgreen.svg)](docs/TESTING.md)
+[![Platform: Windows & macOS](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue.svg)](docs/PRODUCT_SPEC.md)
 [![Architecture: Local--First](https://img.shields.io/badge/Architecture-Local--First-orange.svg)](docs/ARCHITECTURE.md)
 
-**LIGHT** is a local-first, low-latency, voice-controlled Windows and browser automation assistant. It listens continuously to speech-to-text transcriptions from the local **Handy** desktop engine, parses commands through a multi-tier hybrid brain (deterministic fast path in <1ms, local Qwen3 1.7B planning via Ollama, and strict prefix-guarded Laya classification), and executes verified actions across Windows desktop applications, physical mouse/keyboard controls, deterministic Playwright browser automation, and an isolated Browser Use autonomous agent.
+**LIGHT** is a local-first, low-latency, voice-controlled desktop and browser automation assistant supporting **Windows** and **macOS**. It ingests speech-to-text transcriptions through an extensible `VoiceInputProvider` architecture (Handy SQLite on Windows/macOS with graceful fallback), parses commands through a multi-tier hybrid brain (deterministic fast path in <1ms, local Qwen3 1.7B planning via Ollama, and strict prefix-guarded Laya classification), and executes verified actions across operating system applications, physical mouse/keyboard controls, deterministic Playwright browser automation, and an isolated Browser Use autonomous agent.
 
 ```text
-[Handy SQLite DB] ──► [Thread-Safe CommandQueue] ──► [Hybrid Brain (<1ms Fast Path + Qwen3 1.7B)]
-                                                              │
-                    ┌─────────────────────────────────────────┴────────────────────────────┐
-                    ▼                                                                      ▼
-     [Computer Controllers]                                                      [Browser Controllers]
-  ├── Desktop Apps (Notepad, Calc)                                             ├── Playwright Chromium (LIGHT)
-  ├── Screen & Focus Observation                                               │   └── Result Ranking & Verification
-  └── Keyboard, Mouse & Media Keys                                             └── Browser Use Agent (AGENT)
+[VoiceInputProvider] ──► [Thread-Safe CommandQueue] ──► [Hybrid Brain (<1ms Fast Path + Qwen3 1.7B)]
+ (Handy / Fallback)                                                    │
+                      ┌────────────────────────────────────────────────┴────────────────────────────┐
+                      ▼                                                                             ▼
+          [PlatformController]                                                            [Browser Controllers]
+   ├── Windows: Win32, ctypes, PowerShell                                      ├── Playwright Chromium (LIGHT)
+   └── macOS: AppleScript, open, POSIX                                         │   └── Result Ranking & Verification
+                                                                               └── Browser Use Agent (AGENT)
 ```
 
 ---
 
-## Key Capabilities
+## Platform Support Matrix
 
-- **Ambient Continuous Listening**: Dedicated non-blocking listener thread (`core/loop.py`) continuously ingests speech from Handy SQLite `history.db` at 150ms intervals with monotonic ID ordering and duplicate debouncing.
-- **Sub-Millisecond Deterministic Fast Path**: Instantaneous regex and grammatical parsing (<1ms) for common actions (`"open youtube"`, `"scroll down"`, `"press enter"`, `"mute"`).
-- **Local Small Language Model (Qwen3 1.7B via Ollama)**: Plans complex natural language search and browsing workflows offline without cloud API fees or external latency.
-- **Autonomous Web Research Agent (Browser Use)**: Isolated agent mode for open-ended multi-step exploration and synthesis (`"research 3 Python frameworks and compare them"`).
-- **Strict Browser Ownership Model**: Formally transitions between `NONE`, `LIGHT`, and `AGENT` ownership, preventing controller collisions while allowing concurrent desktop commands during web tasks.
-- **Target Candidate Ranking**: Multi-feature link scoring (+120 domain, +80 slug, +50 target) prioritizing official repositories and primary project documentation over ads and irrelevant links.
-- **Semantic Destination Verification**: Validates landing URLs, domains, and title semantics post-navigation, refusing to report false success.
-- **Immediate STOP Preemption (<5ms)**: Instantaneous cancellation of in-flight wait loops, active browser agents, and queued actions when the user says `"Stop"`, `"Cancel"`, or `"Quit"`.
-- **Focus-Aware Desktop Typing**: Verifies foreground window and application identity before keystrokes are typed, preventing accidental input leakage.
-
----
-
-## Documentation Suite
-
-Comprehensive system documentation is organized under [`docs/`](docs/):
-
-| Document | Purpose |
-| :--- | :--- |
-| **[`AGENTS.md`](AGENTS.md)** | **Primary AI developer contract**, operational invariants, modification workflows, and forbidden behaviors. |
-| **[`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md)** | Functional and non-functional product requirements, user experience, and core boundaries. |
-| **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** | Complete technical architecture, component dependencies, ownership lifecycles, and data flows. |
-| **[`docs/FEATURES.md`](docs/FEATURES.md)** | Subsystem feature matrix, verified commands, source files, and test mapping. |
-| **[`docs/CHANGELOG.md`](docs/CHANGELOG.md)** | Human-readable milestone evolution history reconstructed from Git commits. |
-| **[`docs/DECISIONS.md`](docs/DECISIONS.md)** | Architecture Decision Records (ADRs) detailing the rationale behind critical engineering decisions. |
-| **[`docs/ROADMAP.md`](docs/ROADMAP.md)** | Completed milestones, current hardening priorities, and planned future improvements. |
-| **[`docs/TESTING.md`](docs/TESTING.md)** | Multi-tier test suite architecture, execution commands, and critical end-to-end verification workflows. |
-| **[`docs/SAFETY.md`](docs/SAFETY.md)** | Operational safety invariants, interruption protocols, and verification rules. |
-| **[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)** | Catalog of historical bugs, root causes, permanent fixes, and regression tests. |
+| Subsystem | Windows (10/11) | macOS (Sonoma/Sequoia) | Status Notes |
+| :--- | :--- | :--- | :--- |
+| **Hybrid Brain & LLM Planner** | **SUPPORTED** | **SUPPORTED** | Pure Python parsing + local Ollama HTTP REST API. |
+| **Playwright Browser Automation** | **SUPPORTED** | **SUPPORTED** | Chromium runs identically on Windows and macOS. |
+| **Autonomous Agent (Browser Use)** | **SUPPORTED** | **SUPPORTED** | Isolated session on `LIGHT-AgentWorker` background thread. |
+| **Desktop Application Lifecycle** | **SUPPORTED** | **SUPPORTED** | Windows `.exe` / `taskkill` vs macOS `open -a` / AppleScript. |
+| **Screen & Window Observation** | **SUPPORTED** | **SUPPORTED** | Win32 DPI & APIs vs macOS AppleScript & Quartz. |
+| **Mouse & Keyboard Control** | **SUPPORTED** | **SUPPORTED** | PyAutoGUI with platform modifier mapping (`ctrl` $\to$ `cmd`). |
+| **Voice Input Provider** | **SUPPORTED** | **PARTIALLY SUPPORTED** | Native Handy SQLite on Windows. On macOS, Handy is third-party dependent; if missing, reports unavailable provider without crashing. |
 
 ---
 
-## Windows Setup & Installation
+## Setup & Installation
 
-### Prerequisites
-1. **Windows 10 / 11** (64-bit) with High-DPI display awareness.
+### Windows Prerequisites
+1. **Windows 10 / 11** (64-bit).
 2. **Python 3.10+** (verified on Python 3.12).
 3. **Handy Desktop App**: For continuous local voice dictation writing to `%APPDATA%\com.pais.handy\history.db`.
-4. **Ollama**: Running locally with `qwen3:1.7b` for complex natural language planning and autonomous agent tasks:
+4. **Ollama**: Running locally with `qwen3:1.7b`:
    ```powershell
    ollama run qwen3:1.7b
    ```
+
+### macOS Prerequisites
+1. **macOS 13+** (Ventura, Sonoma, or Sequoia on Apple Silicon or Intel).
+2. **Python 3.10+** (verified on Python 3.12).
+3. **Permissions**: Grant your terminal / IDE permissions under *System Settings > Privacy & Security*:
+   - **Accessibility**: Required for synthetic keyboard shortcuts and cursor movement.
+   - **Screen Recording**: Required for screen capture and element observation.
+4. **Ollama**: Running locally with `qwen3:1.7b`:
+   ```bash
+   ollama run qwen3:1.7b
+   ```
+5. **Voice Input**: If Handy desktop is installed, LIGHT reads from `~/Library/Application Support/com.pais.handy/history.db`. If Handy is not present, LIGHT gracefully operates with voice listening idle.
 
 ### 1. Environment Setup & Dependencies
 From PowerShell in the project root:
@@ -92,11 +85,11 @@ Say **"Stop"**, **"Stop light"**, **"Exit"**, or **"Quit"** (or press `Ctrl+C`) 
 
 See [`docs/TESTING.md`](docs/TESTING.md) for full testing documentation.
 
-### Full Discovery Test Suite (127 Tests)
+### Full Discovery Test Suite (145 Tests)
 ```powershell
 .\lightenv\Scripts\python.exe -m unittest discover -s tests -v
 ```
-**Baseline Result**: `Ran 127 tests in ~27s` $\to$ `OK (skipped=4)` (123 executed and passed; 4 opt-in Windows host smoke checks skipped by default).
+**Baseline Result**: `Ran 145 tests in ~24s` $\to$ `OK (skipped=8)` (137 executed and passed; 8 opt-in host smoke checks skipped by default).
 
 ### Static Compilation Syntax Check
 ```powershell
@@ -108,6 +101,11 @@ See [`docs/TESTING.md`](docs/TESTING.md) for full testing documentation.
 $env:LIGHT_RUN_WINDOWS_SMOKE="1"; .\lightenv\Scripts\python.exe -m unittest tests/test_windows_smoke.py -v
 ```
 
+### Opt-In macOS Host Smoke Tests
+```bash
+LIGHT_RUN_MACOS_SMOKE=1 python -m unittest tests/test_macos_smoke.py -v
+```
+
 ---
 
 ## Repository Structure
@@ -116,9 +114,9 @@ $env:LIGHT_RUN_WINDOWS_SMOKE="1"; .\lightenv\Scripts\python.exe -m unittest test
 LIGHT/
 ├── AGENTS.md                    # Core operating contract for AI coding assistants
 ├── README.md                    # Developer-facing project overview
-├── config.py                    # Central configuration and environment settings
+├── config.py                    # Central configuration and cross-platform paths
 ├── main.py                      # Single-instance application entry point
-├── requirements.txt             # Primary Python dependencies
+├── requirements.txt             # Primary Python dependencies with platform markers
 │
 ├── brain/                       # Hybrid Decision Engine
 │   ├── commands.py              # Action enum, Command dataclasses
@@ -131,11 +129,15 @@ LIGHT/
 │   ├── agent.py                 # Subordinate Browser Use autonomous agent
 │   └── browser.py               # Deterministic Playwright Chromium controller
 │
-├── computer/                    # Windows Desktop Subsystem
-│   ├── apps.py                  # Application lifecycle (Notepad, Calc, etc.)
-│   ├── keyboard.py              # Keystrokes, typing, hotkeys
+├── computer/                    # Desktop & Hardware Subsystem
+│   ├── apps.py                  # Application lifecycle (Notepad/TextEdit, Calc, etc.)
+│   ├── keyboard.py              # Keystrokes, typing, hotkey mappings
 │   ├── mouse.py                 # Precision cursor homing & physical clicking
-│   └── screen.py                # Window focus observation & window controls
+│   ├── screen.py                # Window focus observation & window controls
+│   ├── platform_base.py         # Abstract PlatformController base class
+│   ├── platform_windows.py      # Windows Win32, ctypes, and PowerShell implementation
+│   ├── platform_macos.py        # macOS AppleScript, open, and POSIX implementation
+│   └── platform_factory.py      # OS detection and platform controller factory
 │
 ├── core/                        # Concurrency & Execution Core
 │   ├── executor.py              # Action dispatcher, ownership routing & background agent worker
@@ -162,15 +164,22 @@ LIGHT/
 │   ├── test_computer.py         # Desktop app, keyboard, and mouse tests
 │   ├── test_integration_local_browser.py # Real headless Playwright DOM tests
 │   ├── test_laya.py             # Deterministic parser & safety guards
+│   ├── test_macos_smoke.py      # Opt-in host macOS smoke tests
 │   ├── test_new_features.py     # Reliability, ranking, verification, agent
+│   ├── test_platform_macos.py   # Unit tests for macOS platform controller
 │   ├── test_queue_and_llm.py    # Producer-consumer queue & Qwen planner
 │   ├── test_voice.py            # SQLite reader & voice debouncing tests
+│   ├── test_voice_provider.py   # VoiceInputProvider abstraction tests
 │   └── test_windows_smoke.py    # Opt-in host Windows smoke tests
 │
 ├── utils/                       # Shared Utilities
 │   └── logger.py                # Standardized prefix logger ([LIGHT], [PERF], etc.)
 │
-└── voice/                       # Speech Ingestion
-    ├── handy.py                 # SQLite reader for Handy history.db
+└── voice/                       # Speech Ingestion & Providers
+    ├── base.py                  # Abstract VoiceInputProvider interface
+    ├── handy_provider.py        # SQLite reader for Handy history.db
+    ├── unavailable_provider.py  # Graceful fallback when no voice provider is configured
+    ├── factory.py               # Voice provider factory with platform awareness
+    ├── handy.py                 # Backward-compatible wrapper for Handy
     └── handy_voice.py           # Compatibility alias
 ```

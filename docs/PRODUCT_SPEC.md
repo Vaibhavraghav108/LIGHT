@@ -88,7 +88,7 @@
 | **Ingestion Latency** | Voice polling loop intervals $\le 150\text{ ms}$; parsing $\le 1\text{ ms}$. | Performance logging (`log_perf`). |
 | **Emergency Preemption** | STOP detection to cancellation event set $\le 5\text{ ms}$. | Dedicated cancellation unit tests. |
 | **Privacy & Security** | Zero external audio streaming; all processing local. | Architectural inspection & firewall isolation. |
-| **Platform Compatibility**| Windows 10/11 64-bit; High-DPI display awareness. | Opt-in Windows smoke test suite. |
+| **Platform Compatibility**| Windows 10/11 64-bit and macOS 13+ (Apple Silicon & Intel). | Cross-platform discovery test suite & smoke tests. |
 | **Test Verification** | 100% pass rate across baseline test discovery suite. | Automated unittest discovery in CI. |
 | **False Positive Guard** | Zero accidental execution of casual speech or unrelated single words. | Safety validation tests (`test_laya.py`). |
 
@@ -99,7 +99,7 @@
 To preserve architectural clarity, product requirements must not be confused with implementation mechanisms:
 
 - **Requirement**: "Ambient continuous listening without push-to-talk."  
-  **Implementation**: Background thread polling Handy SQLite database (`voice/handy.py`).
+  **Implementation**: Background thread polling `VoiceInputProvider` (`HandyVoiceProvider` SQLite reader or fallback).
 - **Requirement**: "Local intelligence without external API keys."  
   **Implementation**: Local Qwen3 1.7B running on Ollama at `http://127.0.0.1:11434`.
 - **Requirement**: "Fast, reliable browser automation."  
