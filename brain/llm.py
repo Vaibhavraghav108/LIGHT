@@ -66,7 +66,7 @@ def validate_llm_action(
     planning_state=None,
 ) -> Command:
     """
-    Strictly validate and normalize a single action dict returned by Qwen3 1.7B.
+    Strictly validate and normalize a single action dict returned by an AI provider.
     Raises ValueError if the action or target is unsafe or invalid.
     """
     if not isinstance(item, dict):
@@ -188,7 +188,7 @@ def validate_llm_action(
 
 class QwenPlanner:
     """
-    Optional local Qwen3 1.7B planner via Ollama.
+    Backward-compatible structured-action planner using the selected AIProvider.
     Only invoked when the fast deterministic parser cannot handle a complex/multi-step command.
     """
 
@@ -304,11 +304,10 @@ class QwenPlanner:
         return json.loads(cleaned_content)
 
     def _call_configured_provider(self, prompt: str) -> dict:
-        if self._transport is not None or (
-            self.ai_provider is not None
-            and self.ai_provider.provider_name == "local"
-            and self.ai_provider.runtime_name == "ollama"
-        ):
+        # Historical unit tests inject a prompt-only transport directly into
+        # QwenPlanner. Production execution always delegates through the
+        # selected AIProvider, including local Ollama.
+        if self._transport is not None:
             return self._call_ollama(prompt)
         if self.ai_provider is None:
             raise ProviderConfigurationError("No AI provider is configured.")
@@ -317,7 +316,7 @@ class QwenPlanner:
 
     def plan_actions(self, text: str, state=None) -> list[Command] | None:
         """
-        Ask Qwen3 1.7B to plan 1 or more structured LIGHT commands.
+        Ask the selected AI provider to plan 1 or more structured LIGHT commands.
         Returns a validated list of Commands, or None if LLM is disabled/unavailable/fails.
         """
         if not self.enabled:

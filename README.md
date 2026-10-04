@@ -17,7 +17,10 @@ selected transcript source -> listener -> priority queue -> deterministic brain
                                            -> verification -> state
 ```
 
-## What is in `v0.5.0`
+## Current branch capabilities
+
+This feature branch builds on the tagged `v0.5.0` baseline and adds the
+provider/model milestone; provider selection is not part of the `v0.5.0` tag.
 
 - continuous transcript ingestion from local Handy or an explicit custom
   transcript-feed API, with an unavailable-provider mode;
@@ -143,7 +146,9 @@ include `HANDY_DB_PATH`, `LAYA_MODEL`, `LLM_ENABLED`, `LLM_PROVIDER`,
 `PLAYWRIGHT_BROWSERS_PATH`. Browser Use defaults to repository-local
 `.light_browseruse/` storage with optional telemetry and cloud sync disabled.
 The legacy `LLM_*` values remain compatible defaults when no provider file is
-present. `LIGHT_PROVIDER_CONFIG` can point to a different provider JSON file.
+present. Explicit `LIGHT_AI_PROVIDER`, `LIGHT_AI_RUNTIME`, `LIGHT_AI_MODEL`,
+and `LIGHT_AI_BASE_URL` values do not inherit legacy Ollama-specific defaults.
+`LIGHT_PROVIDER_CONFIG` can point to a different provider JSON file.
 
 Start Ollama when LLM planning or agent work is desired:
 

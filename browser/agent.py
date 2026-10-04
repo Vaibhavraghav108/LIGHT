@@ -11,7 +11,7 @@ class AutonomousBrowserAgent:
     """
     Subordinate autonomous browser agent powered by browser-use.
     Used ONLY for open-ended, complex, goal-oriented research and comparison tasks.
-    Configured to use the local Ollama instance (qwen3:1.7b) shared across LIGHT.
+    Reuses LIGHT's explicitly selected AI provider and model.
     Remains strictly under LIGHT's priority STOP and cancellation control.
     """
 

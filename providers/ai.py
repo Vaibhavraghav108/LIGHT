@@ -34,7 +34,7 @@ class ProviderStatus:
 def _resolve_credential(config: AIConfig, default_env: str | None, required: bool) -> str | None:
     env_name = config.credential_env or default_env
     value = os.environ.get(env_name, "").strip() if env_name else ""
-    if required and not value:
+    if (required or config.credential_env is not None) and not value:
         raise ProviderConfigurationError(
             f"{config.provider} requires a credential in environment variable {env_name}."
         )
@@ -109,7 +109,16 @@ class AIProvider(ABC):
     def validate(self) -> ProviderStatus:
         try:
             models = self.list_models()
-            if models and self.model not in models:
+            if not models:
+                return ProviderStatus(
+                    "ai",
+                    self.provider_name,
+                    self.runtime_name,
+                    self.model,
+                    False,
+                    "Provider returned no models; configured model availability could not be verified.",
+                )
+            if self.model not in models:
                 return ProviderStatus(
                     "ai",
                     self.provider_name,

@@ -92,9 +92,9 @@ class STTConfig:
 class AIConfig:
     enabled: bool = True
     provider: str = "local"
-    runtime: str = "ollama"
-    model: str = "qwen3:1.7b"
-    base_url: str | None = "http://127.0.0.1:11434"
+    runtime: str = ""
+    model: str = ""
+    base_url: str | None = None
     credential_env: str | None = None
     timeout: float = 8.0
 
@@ -106,18 +106,30 @@ class AIConfig:
             raise ProviderConfigurationError(
                 f"Unknown AI provider '{provider}'. Choose one of: {', '.join(AI_PROVIDER_CHOICES)}."
             )
-        if provider == "local" and runtime not in LOCAL_AI_RUNTIMES:
+        base_url = self.base_url
+        if provider == "local":
+            runtime = runtime or "ollama"
+            if runtime not in LOCAL_AI_RUNTIMES:
+                raise ProviderConfigurationError(
+                    f"Unknown local AI runtime '{runtime}'. Choose one of: {', '.join(LOCAL_AI_RUNTIMES)}."
+                )
+            if runtime == "ollama":
+                model = model or "qwen3:1.7b"
+                base_url = base_url or "http://127.0.0.1:11434"
+            elif base_url is None:
+                base_url = "http://127.0.0.1:1234/v1"
+        elif runtime:
             raise ProviderConfigurationError(
-                f"Unknown local AI runtime '{runtime}'. Choose one of: {', '.join(LOCAL_AI_RUNTIMES)}."
+                f"AI runtime '{runtime}' is only valid with provider=local."
             )
         if not model:
             raise ProviderConfigurationError("AI model must be explicit and non-empty.")
-        if provider == "custom_api" and not self.base_url:
+        if provider == "custom_api" and not base_url:
             raise ProviderConfigurationError("Custom API AI requires base_url.")
         object.__setattr__(self, "provider", provider)
         object.__setattr__(self, "runtime", runtime)
         object.__setattr__(self, "model", model)
-        object.__setattr__(self, "base_url", _normalise_url(self.base_url))
+        object.__setattr__(self, "base_url", _normalise_url(base_url))
         object.__setattr__(self, "timeout", _positive_timeout(self.timeout))
         object.__setattr__(self, "credential_env", _credential_env_name(self.credential_env))
 
@@ -145,25 +157,28 @@ def _env_bool(value: str | None, default: bool) -> bool:
 def _defaults_from_environment(env: Mapping[str, str]) -> ProviderSettings:
     # Legacy LLM_* and HANDY_DB_PATH variables remain supported so existing
     # installations keep identical behavior after this architecture change.
+    explicit_ai_provider = "LIGHT_AI_PROVIDER" in env
     legacy_provider = env.get("LLM_PROVIDER", "ollama").strip().lower()
     legacy_ai_provider = "local" if legacy_provider in LOCAL_AI_RUNTIMES else legacy_provider
     selected_ai_provider = env.get("LIGHT_AI_PROVIDER", legacy_ai_provider).strip().lower()
     if "LIGHT_AI_RUNTIME" in env:
         selected_ai_runtime = env["LIGHT_AI_RUNTIME"]
-    elif selected_ai_provider == "local":
+    elif not explicit_ai_provider and selected_ai_provider == "local":
         selected_ai_runtime = legacy_provider if legacy_provider in LOCAL_AI_RUNTIMES else "ollama"
     else:
         selected_ai_runtime = ""
     if "LIGHT_AI_BASE_URL" in env:
         selected_ai_base_url = env["LIGHT_AI_BASE_URL"]
-    elif "LLM_BASE_URL" in env:
+    elif not explicit_ai_provider and "LLM_BASE_URL" in env:
         selected_ai_base_url = env["LLM_BASE_URL"]
-    elif selected_ai_provider == "local" and selected_ai_runtime == "ollama":
-        selected_ai_base_url = "http://127.0.0.1:11434"
-    elif selected_ai_provider == "local" and selected_ai_runtime == "lm_studio":
-        selected_ai_base_url = "http://127.0.0.1:1234/v1"
     else:
         selected_ai_base_url = None
+    if "LIGHT_AI_MODEL" in env:
+        selected_ai_model = env["LIGHT_AI_MODEL"]
+    elif not explicit_ai_provider:
+        selected_ai_model = env.get("LLM_MODEL", "")
+    else:
+        selected_ai_model = ""
     return ProviderSettings(
         stt=STTConfig(
             provider=env.get("LIGHT_STT_PROVIDER", "local"),
@@ -178,7 +193,7 @@ def _defaults_from_environment(env: Mapping[str, str]) -> ProviderSettings:
             enabled=_env_bool(env.get("LIGHT_AI_ENABLED", env.get("LLM_ENABLED")), True),
             provider=selected_ai_provider,
             runtime=selected_ai_runtime,
-            model=env.get("LIGHT_AI_MODEL", env.get("LLM_MODEL", "qwen3:1.7b")),
+            model=selected_ai_model,
             base_url=selected_ai_base_url,
             credential_env=env.get("LIGHT_AI_CREDENTIAL_ENV") or None,
             timeout=float(env.get("LIGHT_AI_TIMEOUT", env.get("LLM_TIMEOUT", "8.0"))),
@@ -198,6 +213,25 @@ def _merge_section(defaults: object, raw: object) -> dict:
             f"Unknown provider configuration field(s): {', '.join(sorted(unknown))}."
         )
     values.update(raw)
+    return values
+
+
+def _merge_ai_section(defaults: AIConfig, raw: object) -> dict:
+    values = _merge_section(defaults, raw)
+    if not isinstance(raw, dict):
+        return values
+
+    selected_provider = str(raw.get("provider", defaults.provider)).strip().lower()
+    selected_runtime = str(raw.get("runtime", defaults.runtime)).strip().lower()
+    provider_changed = selected_provider != defaults.provider
+    runtime_changed = selected_runtime != defaults.runtime
+    if provider_changed and "runtime" not in raw:
+        values["runtime"] = ""
+    if provider_changed or runtime_changed:
+        if "model" not in raw:
+            values["model"] = ""
+        if "base_url" not in raw:
+            values["base_url"] = None
     return values
 
 
@@ -231,7 +265,7 @@ def load_provider_settings(
         )
     return ProviderSettings(
         stt=STTConfig(**_merge_section(defaults.stt, raw.get("stt"))),
-        ai=AIConfig(**_merge_section(defaults.ai, raw.get("ai"))),
+        ai=AIConfig(**_merge_ai_section(defaults.ai, raw.get("ai"))),
     )
 
 

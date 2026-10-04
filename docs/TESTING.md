@@ -20,9 +20,9 @@ converted into a skip; source and tests were not changed by this documentation
 milestone. After the targeted pass, the final full rerun completed in 26.050s
 with **147 passing and 8 skipped**.
 
-The provider/model feature branch adds 22 deterministic provider tests plus one
-Handy-path regression. Its local Windows full-suite result is **178 discovered,
-170 passing, 8 skipped** in 29.018s. These tests mock provider HTTP/SDK
+The provider/model feature branch adds 30 deterministic provider tests plus one
+Handy-path regression. Its final local Windows full-suite result is **186
+discovered, 178 passing, 8 skipped**. These tests mock provider HTTP/SDK
 boundaries; they do not make live OpenAI, Claude, Gemini, LM Studio, Ollama,
 Handy, or custom-service claims.
 
@@ -33,12 +33,12 @@ Handy, or custom-service claims.
 | Unit/parser/platform mocks | `test_laya`, `test_voice*`, `test_computer`, `test_browser`, `test_platform_macos` | 60 | parsing, routing, validation, provider behavior, platform commands | real OS permissions/hardware/GUI results |
 | Local real-browser integration | `test_integration_local_browser` | 5 | headless Chromium against localhost DOM; copy path reaches real clipboard | public websites, real display coordinates, clipboard availability everywhere |
 | Queue/LLM/reliability | `test_queue_and_llm`, `test_new_features` | 83 | concurrency, cancellation, normalization, ownership, agent lifecycle with mocks/local pages | live Ollama or a full Browser Use research run |
-| Provider/model architecture | `test_provider_architecture` | 22 | configuration, registry, protocol shapes, credentials, redaction, no-fallback, planner/agent reuse | live external accounts, model quality, direct audio STT |
+| Provider/model architecture | `test_provider_architecture` | 30 | configuration, provider-aware defaults, strict activation validation, protocol shapes, credentials, redaction, no-fallback, planner/agent reuse | live external accounts, model quality, direct audio STT |
 | Opt-in host smoke | `test_windows_smoke`, `test_macos_smoke` | 8 | selected browser, clipboard, display, and provider observations on the current host | destructive actions or full end-to-end voice workflow |
 
 Per-file counts: voice 6, voice provider 6, Laya 16, computer 14,
 macOS platform 9, browser 9, local browser 5, queue/LLM 25, new features 58,
-provider architecture 22, Windows smoke 4, macOS smoke 4.
+provider architecture 30, Windows smoke 4, macOS smoke 4.
 
 ## Stable commands
 

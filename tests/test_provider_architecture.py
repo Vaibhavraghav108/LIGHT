@@ -130,6 +130,54 @@ class TestProviderConfiguration(unittest.TestCase):
         self.assertEqual(settings.ai.runtime, "")
         self.assertIsNone(settings.ai.base_url)
 
+    def test_explicit_non_ollama_providers_ignore_all_legacy_ollama_defaults(self):
+        cases = (
+            ("openai", "openai-model", None),
+            ("claude", "claude-model", None),
+            ("gemini", "gemini-model", None),
+            ("custom_api", "custom-model", "https://models.example.test/v1"),
+        )
+        for provider, model, base_url in cases:
+            with self.subTest(provider=provider):
+                environ = {
+                    "LIGHT_AI_PROVIDER": provider,
+                    "LIGHT_AI_MODEL": model,
+                    "LLM_PROVIDER": "ollama",
+                    "LLM_MODEL": "qwen3:1.7b",
+                    "LLM_BASE_URL": "http://127.0.0.1:11434",
+                }
+                if base_url is not None:
+                    environ["LIGHT_AI_BASE_URL"] = base_url
+                settings = load_provider_settings(
+                    path=Path("definitely-missing-provider-config.json"),
+                    environ=environ,
+                )
+                self.assertEqual(settings.ai.provider, provider)
+                self.assertEqual(settings.ai.runtime, "")
+                self.assertEqual(settings.ai.model, model)
+                self.assertEqual(settings.ai.base_url, base_url)
+
+    def test_explicit_local_ollama_selection_receives_ollama_defaults(self):
+        settings = load_provider_settings(
+            path=Path("definitely-missing-provider-config.json"),
+            environ={"LIGHT_AI_PROVIDER": "local"},
+        )
+        self.assertEqual(settings.ai.runtime, "ollama")
+        self.assertEqual(settings.ai.model, "qwen3:1.7b")
+        self.assertEqual(settings.ai.base_url, "http://127.0.0.1:11434")
+
+    def test_partial_provider_file_cannot_inherit_ollama_runtime_or_endpoint(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "providers.json"
+            path.write_text(
+                json.dumps({"ai": {"provider": "openai", "model": "gpt-test"}}),
+                encoding="utf-8",
+            )
+            settings = load_provider_settings(path=path, environ={})
+        self.assertEqual(settings.ai.provider, "openai")
+        self.assertEqual(settings.ai.runtime, "")
+        self.assertIsNone(settings.ai.base_url)
+
     def test_inaccessible_provider_config_has_clear_configuration_error(self):
         with patch(
             "providers.configuration.Path.exists",
@@ -303,6 +351,53 @@ class TestAIProviders(unittest.TestCase):
             with self.assertRaisesRegex(ProviderConfigurationError, "LIGHT_MISSING_CLAUDE_KEY"):
                 provider.list_models()
 
+    def test_empty_model_discovery_cannot_validate_configured_model(self):
+        provider = OllamaAIProvider(
+            AIConfig(),
+            transport=lambda *_: {"models": []},
+        )
+        status = provider.validate()
+        self.assertFalse(status.available)
+        self.assertIn("returned no models", status.message)
+
+    def test_configured_model_absent_from_discovery_fails_validation(self):
+        provider = OllamaAIProvider(
+            AIConfig(),
+            transport=lambda *_: {"models": [{"name": "different-model"}]},
+        )
+        status = provider.validate()
+        self.assertFalse(status.available)
+        self.assertIn("was not reported", status.message)
+
+    def test_explicit_optional_credential_env_missing_fails_validation(self):
+        provider = build_ai_provider(
+            AIConfig(
+                provider="custom_api",
+                model="custom-model",
+                base_url="https://models.example.test/v1",
+                credential_env="LIGHT_MISSING_CUSTOM_KEY",
+            ),
+            transport=MagicMock(),
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            status = provider.validate()
+        self.assertFalse(status.available)
+        self.assertIn("LIGHT_MISSING_CUSTOM_KEY", status.message)
+
+    def test_valid_credential_and_discovered_model_pass_validation(self):
+        provider = OpenAIAIProvider(
+            AIConfig(
+                provider="openai",
+                model="gpt-test",
+                credential_env="LIGHT_TEST_OPENAI_KEY",
+            ),
+            transport=lambda *_: {"data": [{"id": "gpt-test"}]},
+        )
+        with patch.dict("os.environ", {"LIGHT_TEST_OPENAI_KEY": "secret-value"}, clear=True):
+            status = provider.validate()
+        self.assertTrue(status.available)
+        self.assertEqual(status.model, "gpt-test")
+
     def test_claude_and_gemini_response_shapes(self):
         with patch.dict(
             "os.environ",
@@ -365,6 +460,22 @@ class TestAIProviders(unittest.TestCase):
         commands = planner.plan_actions("Click the Subscribe banner")
         self.assertEqual(commands, [Command(Action.CLICK_ELEMENT, "Subscribe")])
         provider.complete.assert_called_once()
+
+    def test_ollama_planner_inference_delegates_to_selected_provider_adapter(self):
+        provider = OllamaAIProvider(
+            AIConfig(),
+            transport=lambda *_: {
+                "message": {
+                    "content": '{"actions": [{"action": "CLICK_ELEMENT", "target": "Subscribe"}]}'
+                }
+            },
+        )
+        with patch.object(provider, "complete", wraps=provider.complete) as complete:
+            commands = QwenPlanner(enabled=True, ai_provider=provider).plan_actions(
+                "Click the Subscribe banner"
+            )
+        self.assertEqual(commands, [Command(Action.CLICK_ELEMENT, "Subscribe")])
+        complete.assert_called_once()
 
     def test_browser_agent_uses_selected_provider_without_implicit_fallback(self):
         provider = MagicMock()

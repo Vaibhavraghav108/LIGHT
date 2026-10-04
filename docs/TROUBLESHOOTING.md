@@ -563,9 +563,17 @@ independently.
 ### Fix
 Typed provider/model configuration and an explicit AI adapter registry now own
 transport and model discovery. The backward-compatible planner delegates to the
-selected adapter, and Browser Use reuses that same selection. Every adapter
+selected adapter for every production inference, including Ollama, and Browser
+Use reuses that same selection. The planner's prompt-only injected transport is
+retained only for isolated legacy tests. Every adapter
 returns through the existing action validation. Configuration activation is
 explicit; an unavailable provider never causes silent provider/model fallback.
+
+Ollama defaults are applied only to local Ollama selections. Explicit cloud or
+custom providers do not inherit `runtime=ollama`, `qwen3:1.7b`, or the local
+Ollama endpoint from legacy configuration. Activation fails closed when model
+discovery is empty, the configured model is absent, or an explicitly named
+credential environment variable is missing.
 
 The audit also confirmed that `VoiceInputProvider` starts at completed
 transcript events. Handy remains the supported local runtime, and custom STT is
@@ -574,6 +582,9 @@ audio capture/VAD contract.
 
 ### Regression Tests
 - `tests/test_provider_architecture.py`
+- `tests/test_provider_architecture.py::TestAIProviders::test_ollama_planner_inference_delegates_to_selected_provider_adapter`
+- `tests/test_provider_architecture.py::TestProviderConfiguration::test_explicit_non_ollama_providers_ignore_all_legacy_ollama_defaults`
+- `tests/test_provider_architecture.py::TestAIProviders::test_empty_model_discovery_cannot_validate_configured_model`
 - `tests/test_queue_and_llm.py::TestProducerConsumerQueueAndLLM::test_04_phase9_all_22_fast_path_commands_have_zero_llm_calls`
 - `tests/test_new_features.py::TestNewFeatures::test_16_agent_task_initialization_logs_and_ollama`
 

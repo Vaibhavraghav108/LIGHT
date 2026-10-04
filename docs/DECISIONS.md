@@ -1,9 +1,11 @@
 # LIGHT — Architecture Decision Records (ADRs)
 
 This file preserves the rationale, trade-offs, and consequences of critical
-technical decisions. **Active** decisions govern `v0.5.0`; **Historical**
+technical decisions. **Active** decisions govern current source; **Historical**
 decisions explain earlier behavior but no longer govern it; **Superseded**
-decisions identify their replacement. No ADR is currently superseded.
+decisions identify their replacement. ADR-015 is an unreleased feature-branch
+decision; it is not part of the `v0.5.0` tag. ADR-002 is superseded for provider
+selection but retained as the default local configuration.
 
 ---
 
@@ -344,6 +346,11 @@ Store user selection in ignored `.light/providers.json`. Persist only a
 credential environment-variable name, validate CLI candidates before atomic
 activation, and sanitize provider errors. Continue accepting legacy `LLM_*`
 and `HANDY_DB_PATH` defaults for existing installations.
+
+Provider defaults are selection-aware: Ollama runtime, model, and endpoint
+defaults apply only to local Ollama. Activation requires a non-empty model
+inventory containing the selected model and any explicitly configured
+credential environment variable.
 
 ## Reason
 Provider identity and model identity change independently. Hardcoding Ollama

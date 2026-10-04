@@ -17,17 +17,22 @@
 - A documented custom transcript-feed `VoiceInputProvider` while preserving
   Handy as the default local runtime.
 - Provider architecture, configuration, credential, redaction, no-fallback,
-  planner, and Browser Use regression tests (22 new provider tests plus one
+  planner, and Browser Use regression tests (30 provider tests plus one
   inaccessible-Handy-path regression).
 
 ### Changed
-- `QwenPlanner` remains backward-compatible but delegates non-Ollama transport
-  to the selected `AIProvider` and applies the same action validation to every
-  model.
+- `QwenPlanner` remains backward-compatible but delegates every production
+  inference, including Ollama, to the selected `AIProvider` and applies the
+  same action validation to every model. Its prompt-only injected transport is
+  retained solely for isolated legacy tests.
 - Browser Use now uses the selected AI provider/model rather than hardcoding
   `ChatOllama`; local Ollama/Qwen3 remains the default.
 - Startup reports active STT and AI provider/runtime/model without printing
   credential values.
+- Provider-specific defaults no longer leak Ollama runtime/model/endpoint
+  values into explicit cloud or custom selections. Empty model inventories,
+  absent configured models, and missing explicitly named credentials now fail
+  activation validation.
 
 ### Safety and limits
 - Cloud AI is opt-in and never a fallback. Credential values are resolved from

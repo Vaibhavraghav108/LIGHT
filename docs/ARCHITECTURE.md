@@ -166,7 +166,9 @@ a provider. The default user file is `.light/providers.json`, ignored by Git;
 - `status` contacts the selected endpoints and reports availability;
 - `models` discovers models from Ollama `/api/tags` or provider model APIs;
 - `set-ai` / `set-stt` validate the candidate before atomically replacing the
-  configuration file. A failed candidate remains inactive.
+  configuration file. AI activation requires a non-empty discovered model list,
+  the exact configured model, and any explicitly named credential environment
+  variable. A failed or unverified candidate remains inactive.
 
 AI planning uses standard-library HTTP, so switching providers does not add a
 mandatory SDK. Browser Use is already optional and supplies lazy native
@@ -199,7 +201,9 @@ and `HANDY_DB_PATH` environment defaults retained for compatibility. General
 configuration is read from environment variables and optional untracked
 `.env`. Browser Use configuration defaults to `.light_browseruse/`, with its
 optional telemetry and cloud sync disabled unless a user explicitly overrides
-them.
+them. Legacy Ollama runtime, model, and endpoint defaults apply only when the
+legacy/default local Ollama selection is active; an explicit non-Ollama
+provider must supply its own model and endpoint where required.
 
 ## Architectural limits
 
