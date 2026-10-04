@@ -1,12 +1,14 @@
 import os
 import subprocess
+from computer.platform_factory import get_platform_controller
 from config import get_brave_candidate_paths, get_chrome_candidate_paths
 from utils.logger import log_debug, log_warning
 
 
 class AppController:
 
-    def __init__(self):
+    def __init__(self, platform=None):
+        self.platform = platform if platform is not None else get_platform_controller()
         self._launched_processes: dict[str, list[subprocess.Popen]] = {
             "brave": [],
             "chrome": [],
@@ -53,10 +55,9 @@ class AppController:
             proc = subprocess.Popen([self.find_brave_executable()])
         elif key == "chrome":
             proc = subprocess.Popen([self.find_chrome_executable()])
-        elif key == "notepad":
-            proc = subprocess.Popen(["notepad.exe"])
-        elif key == "calculator":
-            proc = subprocess.Popen(["calc.exe"])
+        elif key in ("notepad", "calculator"):
+            cmd = self.platform.get_app_launch_command(key)
+            proc = subprocess.Popen(cmd)
         else:
             raise ValueError(f"Unknown application: {app_name}")
 
@@ -110,32 +111,28 @@ class AppController:
                 remaining.append(proc)
         self._launched_processes[key] = remaining
 
-        # 2. For Brave/Chrome, NEVER run taskkill /F by default across the user's session.
-        # Only run taskkill /F if explicitly opted in via force=True or LIGHT_FORCE_KILL_BROWSERS=1.
+        # 2. For Brave/Chrome, NEVER run force-kill by default across the user's session.
+        # Only run force-kill if explicitly opted in via force=True or LIGHT_FORCE_KILL_BROWSERS=1.
         if key in ("brave", "chrome"):
             if force_opt_in:
-                exe_name = "brave.exe" if key == "brave" else "chrome.exe"
-                subprocess.run(
-                    ["taskkill", "/IM", exe_name, "/F"],
-                    capture_output=True,
-                    text=True,
-                )
-                closed_count += 1
+                for cmd in self.platform.get_app_close_commands(key, force=True):
+                    subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                    )
+                    closed_count += 1
             elif closed_count == 0:
                 log_warning(
-                    f"No LIGHT-started {key.title()} process to close (skipping taskkill /F to protect user browser tabs). "
+                    f"No LIGHT-started {key.title()} process to close (skipping force kill to protect user browser tabs). "
                     "Set LIGHT_FORCE_KILL_BROWSERS=1 or force=True to force-close all instances."
                 )
             return closed_count
 
         # 3. For standard desktop utilities (Notepad, Calculator)
-        processes = {
-            "notepad": ["notepad.exe"],
-            "calculator": ["CalculatorApp.exe", "calc.exe"],
-        }
-        for process_name in processes[key]:
+        for cmd in self.platform.get_app_close_commands(key, force=True):
             subprocess.run(
-                ["taskkill", "/IM", process_name, "/F"],
+                cmd,
                 capture_output=True,
                 text=True,
             )

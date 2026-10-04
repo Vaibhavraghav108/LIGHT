@@ -1,9 +1,9 @@
 # Decision engine
 laya
 
-# Windows computer control, window observation, & clipboard
+# Computer control, window observation, & clipboard
 pyautogui
-pygetwindow
+pygetwindow; sys_platform == 'win32'
 pyperclip
 
 # Browser automation (Brave / Chromium)

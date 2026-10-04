@@ -21,6 +21,7 @@ from utils.logger import (
     log_info,
     log_perf,
     log_voice,
+    log_warning,
 )
 
 
@@ -406,7 +407,9 @@ class LightLoop:
 
         self._stop_requested.clear()
         self._listener_done.clear()
-        self.command_queue.cancel_event.clear()
+        if hasattr(self.handy, "is_available") and not self.handy.is_available():
+            msg = getattr(self.handy, "get_status_message", lambda: "Voice provider unavailable")()
+            log_warning(f"Voice provider inactive: {msg}")
 
         # Remember current transcription at startup so we only run new commands
         try:
