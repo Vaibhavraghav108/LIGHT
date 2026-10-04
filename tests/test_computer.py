@@ -58,7 +58,7 @@ class TestComputerControl(unittest.TestCase):
                 mock_proc.poll.return_value = None
                 mock_popen.return_value = mock_proc
                 apps = AppController(platform=platform)
-                apps.open("Notepad")
+                apps.open("Notepad", wait_and_focus=False)
 
                 closed = apps.close("Notepad")
 
