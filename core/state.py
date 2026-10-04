@@ -105,6 +105,16 @@ class LightState:
     def record_command(self, raw_text: str | None, command: Command):
         """Update state based on a successfully executed command."""
         with self._lock:
+            def mark_light_browser_owner():
+                # The autonomous agent uses an isolated browser session, while
+                # deterministic browser commands may continue concurrently.
+                # Keep AGENT ownership truthful until that worker actually exits.
+                self.browser_ownership = (
+                    BrowserOwnership.AGENT.value
+                    if self.agent_running
+                    else BrowserOwnership.LIGHT.value
+                )
+
             if raw_text:
                 self.previous_command = raw_text
             self.last_action = command.action.value
@@ -150,7 +160,7 @@ class LightState:
                 self.current_app = "brave"
                 self.current_browser = "brave"
                 self.browser_open = True
-                self.browser_ownership = BrowserOwnership.LIGHT.value
+                mark_light_browser_owner()
                 self.current_url = command.target
                 site = self.infer_site_from_url(command.target)
                 self.current_site = site
@@ -160,7 +170,7 @@ class LightState:
                 self.current_app = "brave"
                 self.current_browser = "brave"
                 self.browser_open = True
-                self.browser_ownership = BrowserOwnership.LIGHT.value
+                mark_light_browser_owner()
                 if command.target.lower().startswith("youtube:"):
                     self.current_site = "youtube"
                     self.last_search_query = command.target[8:].strip()
@@ -189,7 +199,7 @@ class LightState:
                 self.current_app = "brave"
                 self.current_browser = "brave"
                 self.browser_open = True
-                self.browser_ownership = BrowserOwnership.LIGHT.value
+                mark_light_browser_owner()
 
             elif command.action in {
                 Action.MEDIA_PLAY_PAUSE,
@@ -219,6 +229,11 @@ class LightState:
                 self.browser_open = False
                 self.current_browser = None
                 self.browser_ownership = BrowserOwnership.NONE.value
+                self.current_url = None
+                self.current_title = None
+                self.current_site = None
+                if self.current_app in {"brave", "chrome", "browser", "chromium"}:
+                    self.current_app = None
                 self.agent_running = False
                 self.pending_incomplete_action = None
                 self.pending_goal = None

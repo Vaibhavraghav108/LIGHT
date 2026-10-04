@@ -1012,6 +1012,31 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
         self.mock_agent.predict.assert_not_called()
         executor.execute.assert_not_called()
 
+    def test_25_failed_plan_only_cancels_its_own_dependent_commands(self):
+        """A failed search must never cancel another utterance's queued click."""
+        queue = CommandQueue()
+        other_plan = CommandRequest(
+            text="open the first result",
+            command=Command(Action.CLICK_RESULT, "1"),
+        )
+        failed_plan = CommandRequest(
+            text="search for LangGraph and open the official repository",
+            command=Command(Action.CLICK_RESULT, "official repository"),
+        )
+        queue.enqueue(other_plan)
+        queue.enqueue(failed_plan)
+
+        cancelled = queue.cancel_dependent_after_failure(
+            Action.SEARCH,
+            failed_text="search for LangGraph and open the official repository",
+        )
+
+        self.assertEqual(cancelled, 1)
+        self.assertEqual(failed_plan.status, CommandStatus.CANCELLED)
+        self.assertEqual(other_plan.status, CommandStatus.QUEUED)
+        self.assertEqual(queue.pending_count(), 1)
+        self.assertIs(queue.dequeue(timeout=0), other_plan)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -823,6 +823,49 @@ class TestNewFeatures(unittest.TestCase):
             bc.verify_destination(expected_target="official repository", expected_query="LangGraph")
         self.assertIn("Semantic verification failed", str(ctx2.exception))
 
+    def test_41b_semantic_verification_rejects_inactive_and_unchanged_pages(self):
+        """A dispatched click is not success when the browser closes or URL never changes."""
+        from browser.browser import BrowserController
+
+        bc = BrowserController()
+        bc.page = MagicMock()
+        bc.is_active = MagicMock(return_value=False)
+        with self.assertRaisesRegex(RuntimeError, "browser became inactive"):
+            bc.verify_destination("official repository", expected_query="LangGraph")
+
+        search_url = "https://github.com/search?q=langgraph&type=repositories"
+        bc.is_active.return_value = True
+        bc.get_current_url = MagicMock(return_value=search_url)
+        bc.get_title = MagicMock(return_value="Repository search results")
+        bc.get_visible_text = MagicMock(return_value="LangGraph official repository")
+        with self.assertRaisesRegex(RuntimeError, "did not navigate away"):
+            bc.verify_destination(
+                "official repository",
+                expected_query="LangGraph",
+                pre_url=search_url,
+                navigation_timeout=0,
+            )
+
+    def test_41c_semantic_verification_wait_is_stop_cancellable(self):
+        from browser.browser import BrowserController
+
+        bc = BrowserController()
+        bc.page = MagicMock()
+        bc.is_active = MagicMock(return_value=True)
+        bc.get_current_url = MagicMock(return_value="https://example.com/search")
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        started = time.perf_counter()
+        with self.assertRaisesRegex(RuntimeError, "cancelled"):
+            bc.verify_destination(
+                "official repository",
+                pre_url="https://example.com/search",
+                cancel_event=cancel_event,
+                navigation_timeout=3,
+            )
+        self.assertLess((time.perf_counter() - started) * 1000, 50)
+
     def test_42_browser_ownership_transitions(self):
         """6. Browser ownership transitions: NONE -> LIGHT -> AGENT -> NONE."""
         from core.state import BrowserOwnership
@@ -882,6 +925,21 @@ class TestNewFeatures(unittest.TestCase):
             expected_keys = ("command", "c") if sys.platform == "darwin" else ("ctrl", "c")
             mock_hotkey.assert_called_once_with(*expected_keys)
 
+    def test_43b_deterministic_browser_command_preserves_active_agent_ownership(self):
+        """Concurrent isolated LIGHT navigation must not erase active AGENT ownership."""
+        from core.state import BrowserOwnership
+
+        self.state.set_browser_ownership(BrowserOwnership.AGENT)
+        self.state.agent_running = True
+        executor = Executor(state=self.state)
+        executor.browser = MagicMock()
+        executor.browser.is_active.return_value = True
+
+        result = executor.execute(Command(Action.OPEN_URL, "https://github.com"))
+
+        self.assertEqual(result, "OK")
+        self.assertEqual(self.state.get_browser_ownership(), BrowserOwnership.AGENT.value)
+
     def test_44_stop_while_agent_task_running(self):
         """8. STOP while AGENT_TASK is running immediately cancels agent and resets ownership."""
         from core.state import BrowserOwnership
@@ -899,6 +957,27 @@ class TestNewFeatures(unittest.TestCase):
         mock_agent.cancel.assert_called_once()
         self.assertFalse(self.state.agent_running)
         self.assertEqual(self.state.get_browser_ownership(), BrowserOwnership.NONE.value)
+        executor.browser.close.assert_called_once()
+
+    def test_44b_stop_clears_stale_browser_state(self):
+        self.state.current_app = "brave"
+        self.state.current_browser = "brave"
+        self.state.current_url = "https://github.com/example/repo"
+        self.state.current_title = "Example repository"
+        self.state.current_site = "github"
+        self.state.browser_open = True
+
+        executor = Executor(state=self.state)
+        executor.browser = MagicMock()
+        result = executor.execute(Command(Action.STOP, None), raw_text="Stop")
+
+        self.assertEqual(result, "STOP")
+        self.assertFalse(self.state.browser_open)
+        self.assertIsNone(self.state.current_app)
+        self.assertIsNone(self.state.current_browser)
+        self.assertIsNone(self.state.current_url)
+        self.assertIsNone(self.state.current_title)
+        self.assertIsNone(self.state.current_site)
         executor.browser.close.assert_called_once()
 
     # ==========================================
@@ -1161,6 +1240,42 @@ class TestNewFeatures(unittest.TestCase):
             agent_block.set()
             executor.join_agent(timeout=1.0)
 
+    def test_49b_agent_admission_uses_one_atomic_critical_section(self):
+        """Admission, state publication, and worker publication share one lock hold."""
+        class CountingLock:
+            def __init__(self):
+                self._lock = threading.Lock()
+                self.entries = 0
+
+            def __enter__(self):
+                self._lock.acquire()
+                self.entries += 1
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                self._lock.release()
+
+        agent_block = threading.Event()
+        mock_agent = MagicMock()
+
+        def slow_agent(*args, **kwargs):
+            agent_block.wait(timeout=5.0)
+            return {"success": True, "cancelled": False, "final_result": "Done"}
+
+        mock_agent.run_task.side_effect = slow_agent
+        executor = Executor(state=self.state)
+        executor.browser_agent = mock_agent
+        counting_lock = CountingLock()
+        executor._agent_lock = counting_lock
+
+        try:
+            self.assertEqual(executor.execute(Command(Action.AGENT_TASK, "research frameworks")), "OK")
+            self.assertEqual(counting_lock.entries, 1)
+            self.assertTrue(self.state.agent_running)
+        finally:
+            agent_block.set()
+            executor.join_agent(timeout=1.0)
+
     def test_50_agent_completion_restores_state_safely(self):
         """F. Successful agent completion restores correct state and ownership."""
         from core.state import BrowserOwnership
@@ -1242,6 +1357,15 @@ class TestNewFeatures(unittest.TestCase):
         self.assertFalse(self.state.agent_running)
         self.assertEqual(self.state.get_browser_ownership(), BrowserOwnership.NONE.value)
         agent_block.set()
+
+    def test_53_browser_agent_defaults_are_local_and_private(self):
+        from browser.agent import AutonomousBrowserAgent
+
+        with patch.dict(os.environ, {}, clear=True):
+            AutonomousBrowserAgent()
+            self.assertEqual(os.environ["ANONYMIZED_TELEMETRY"], "false")
+            self.assertEqual(os.environ["BROWSER_USE_CLOUD_SYNC"], "false")
+            self.assertTrue(os.environ["BROWSER_USE_CONFIG_DIR"].endswith(".light_browseruse"))
 
 
 if __name__ == "__main__":

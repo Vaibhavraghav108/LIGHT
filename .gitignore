@@ -20,5 +20,6 @@ logs/*
 screenshots/
 .playwright-browsers/
 .light_chromium_profile/
+.light_browseruse/
 .light.pid
 tests/.tmp_integration/

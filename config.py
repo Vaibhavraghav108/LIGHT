@@ -21,6 +21,17 @@ def _load_env_file():
 
 _load_env_file()
 
+# Browser Use is an optional local autonomous-agent dependency. Keep its
+# configuration and telemetry behavior aligned with LIGHT's local-first privacy
+# contract before browser_use is imported lazily by browser/agent.py.
+PROJECT_ROOT = Path(__file__).resolve().parent
+BROWSER_USE_CONFIG_DIR = Path(
+    os.environ.get("BROWSER_USE_CONFIG_DIR", str(PROJECT_ROOT / ".light_browseruse"))
+)
+os.environ.setdefault("BROWSER_USE_CONFIG_DIR", str(BROWSER_USE_CONFIG_DIR))
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
+os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
+
 from computer.platform_factory import get_platform_controller
 
 # Speech-to-Text (Handy SQLite Database)
@@ -101,7 +112,7 @@ def get_chrome_candidate_paths() -> list[Path]:
     return get_platform_controller().get_browser_candidate_paths("chrome")
 
 
-WORKSPACE_PLAYWRIGHT_DIR = Path(__file__).resolve().parent / ".playwright-browsers"
+WORKSPACE_PLAYWRIGHT_DIR = PROJECT_ROOT / ".playwright-browsers"
 if WORKSPACE_PLAYWRIGHT_DIR.exists() and "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(WORKSPACE_PLAYWRIGHT_DIR)
 

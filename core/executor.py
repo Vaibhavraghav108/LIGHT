@@ -233,12 +233,21 @@ class Executor:
             if target_str.isdigit() or target_str.lower() in RESULT_ORDINALS:
                 index = int(target_str) if target_str.isdigit() else RESULT_ORDINALS.get(target_str.lower(), 1)
                 try:
-                    self.browser.click_result(index, mouse_controller=self.mouse)
+                    kwargs = {"mouse_controller": self.mouse}
+                    if cancel_event is not None:
+                        kwargs["cancel_event"] = cancel_event
+                    self.browser.click_result(index, **kwargs)
                 except TypeError:
                     self.browser.click_result(index)
             else:
                 try:
-                    self.browser.click_result(target, mouse_controller=self.mouse, search_context=search_context)
+                    kwargs = {
+                        "mouse_controller": self.mouse,
+                        "search_context": search_context,
+                    }
+                    if cancel_event is not None:
+                        kwargs["cancel_event"] = cancel_event
+                    self.browser.click_result(target, **kwargs)
                 except TypeError:
                     self.browser.click_result(target, mouse_controller=self.mouse)
 
@@ -290,12 +299,10 @@ class Executor:
             if self.browser.is_active() or target:
                 self.browser.copy_text_range(target)
             else:
-                import pyautogui
-                pyautogui.hotkey("ctrl", "c")
+                self.keyboard.hotkey("ctrl", "c")
 
         elif action == Action.PASTE:
-            import pyautogui
-            pyautogui.hotkey("ctrl", "v")
+            self.keyboard.hotkey("ctrl", "v")
 
         # ==========================================
         # MEDIA CONTROLS
@@ -388,17 +395,6 @@ class Executor:
                 log_executor("Agent task cancelled before start: CANCELLED")
                 return "CANCELLED"
 
-            with self._agent_lock:
-                if self.state.agent_running or (self._agent_thread is not None and self._agent_thread.is_alive()):
-                    log_executor(
-                        f"[AGENT_TASK] Duplicate agent task rejected: an autonomous agent task is already active. Ignoring '{target}'."
-                    )
-                    return "REJECTED"
-
-            with self.state._lock:
-                self.state.agent_running = True
-                self.state.set_browser_ownership(BrowserOwnership.AGENT)
-
             def _agent_worker():
                 try:
                     log_executor(f"[AGENT_TASK] Background worker started for: '{target}'")
@@ -446,8 +442,18 @@ class Executor:
                 daemon=True,
             )
             with self._agent_lock:
+                if self.state.agent_running or (self._agent_thread is not None and self._agent_thread.is_alive()):
+                    log_executor(
+                        f"[AGENT_TASK] Duplicate agent task rejected: an autonomous agent task is already active. Ignoring '{target}'."
+                    )
+                    return "REJECTED"
+                with self.state._lock:
+                    self.state.agent_running = True
+                    self.state.set_browser_ownership(BrowserOwnership.AGENT)
+                self.last_agent_result = None
+                self.last_agent_error = None
                 self._agent_thread = worker_thread
-            worker_thread.start()
+                worker_thread.start()
             self.state.record_command(raw_text, command)
             return "OK"
 
@@ -481,6 +487,7 @@ class Executor:
                 self.state.agent_running = False
                 self.state.set_browser_ownership(BrowserOwnership.NONE)
             self.browser.close()
+            self.state.record_command(raw_text, command)
             return "STOP"
 
         else:
