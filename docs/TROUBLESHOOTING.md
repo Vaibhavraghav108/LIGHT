@@ -358,3 +358,38 @@ FileNotFoundError: Handy database not found:
 ### Regression Test
 - `tests/test_voice_provider.py::TestVoiceProviders::test_factory_returns_unavailable_when_db_missing_without_crashing`
 - `tests/test_voice_provider.py::TestVoiceProviders::test_unavailable_provider_behavior`
+
+
+---
+
+## Issue 13 — macOS CI Test Discovery Failures (PyObjC & Platform Assertions)
+
+### Problem
+When executing automated test discovery on `macos-latest` GitHub Actions runners, test discovery failed due to missing PyAutoGUI macOS frameworks and Windows-specific mock assertions.
+
+### Symptoms
+```text
+AssertionError: You must first install pyobjc-core and pyobjc
+AssertionError: expected call not found. Expected: hotkey('ctrl', 'r') Actual: hotkey('command', 'r')
+AssertionError: expected call not found. Expected: Popen(['notepad.exe']) Actual: Popen(['open', '-a', 'TextEdit'])
+```
+
+### Root Cause
+1. PyAutoGUI's macOS backend (`_pyautogui_osx.py`) imports `Quartz` and `AppKit`. Without `pyobjc-core`, `pyobjc-framework-Quartz`, and `pyobjc-framework-Cocoa`, PyAutoGUI aborts during import on native macOS.
+2. Unit tests in `tests/test_computer.py` and `tests/test_new_features.py` had hardcoded Windows command strings (`notepad.exe`, `taskkill /IM ...`, `ctrl+c`), causing them to fail when running against native `MacOSPlatformController`.
+3. In `tests/test_voice.py`, process scan simulation only emitted Windows PowerShell output format rather than POSIX `ps` output.
+
+### Fix
+1. In `requirements.txt`, added `pyobjc-core`, `pyobjc-framework-Quartz`, and `pyobjc-framework-Cocoa` guarded with `sys_platform == 'darwin'`.
+2. Updated `tests/test_computer.py`, `tests/test_new_features.py`, and `tests/test_voice.py` to assert platform-appropriate commands (`open -a TextEdit`, `pkill -f TextEdit`, `command+c`, `ps` output) conditionally based on `sys.platform`.
+3. Configured `strategy.fail-fast: false` in `.github/workflows/tests.yml` so that matrix runners execute to completion independently.
+
+### Relevant Files
+- [`requirements.txt`](file:///c:/Projects/LIGHT/requirements.txt), [`tests/test_computer.py`](file:///c:/Projects/LIGHT/tests/test_computer.py), [`tests/test_new_features.py`](file:///c:/Projects/LIGHT/tests/test_new_features.py), [`tests/test_voice.py`](file:///c:/Projects/LIGHT/tests/test_voice.py), [`.github/workflows/tests.yml`](file:///c:/Projects/LIGHT/.github/workflows/tests.yml)
+
+### Regression Test
+- `tests/test_computer.py::TestComputerControl::test_open_notepad_and_calculator`
+- `tests/test_computer.py::TestComputerControl::test_close_apps`
+- `tests/test_computer.py::TestComputerControl::test_keyboard_hotkey`
+- `tests/test_new_features.py::TestNewFeatures::test_05_hotkey_execution`
+- `tests/test_voice.py::TestHandyVoiceAndLoop::test_ensure_single_instance_kills_stale_pids_and_writes_current_pid`

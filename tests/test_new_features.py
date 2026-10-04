@@ -1,3 +1,4 @@
+import sys
 import threading
 import time
 import unittest
@@ -99,7 +100,8 @@ class TestNewFeatures(unittest.TestCase):
             cmd = Command(Action.HOTKEY, "ctrl+c")
             res = executor.execute(cmd)
             self.assertEqual(res, "OK")
-            mock_hotkey.assert_called_once_with("ctrl", "c")
+            expected_keys = ("command", "c") if sys.platform == "darwin" else ("ctrl", "c")
+            mock_hotkey.assert_called_once_with(*expected_keys)
 
     # ==========================================
     # STAGE 2: WINDOW CONTROL
@@ -875,7 +877,8 @@ class TestNewFeatures(unittest.TestCase):
         with patch("pyautogui.hotkey") as mock_hotkey:
             res_hotkey = executor.execute(Command(Action.HOTKEY, "ctrl+c"))
             self.assertEqual(res_hotkey, "OK")
-            mock_hotkey.assert_called_once_with("ctrl", "c")
+            expected_keys = ("command", "c") if sys.platform == "darwin" else ("ctrl", "c")
+            mock_hotkey.assert_called_once_with(*expected_keys)
 
     def test_44_stop_while_agent_task_running(self):
         """8. STOP while AGENT_TASK is running immediately cancels agent and resets ownership."""

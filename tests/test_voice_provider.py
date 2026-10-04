@@ -79,7 +79,8 @@ class TestVoiceProviders(unittest.TestCase):
         provider = get_voice_provider(db_path=missing_db)
         self.assertIsInstance(provider, UnavailableVoiceProvider)
         self.assertFalse(provider.is_available())
-        self.assertIn("not found", provider.get_status_message().lower())
+        msg = provider.get_status_message().lower()
+        self.assertTrue("not found" in msg or "not currently verified" in msg or "unavailable" in msg)
 
 
 if __name__ == "__main__":

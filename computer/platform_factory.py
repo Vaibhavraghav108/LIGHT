@@ -6,7 +6,6 @@ based on the active operating system (sys.platform).
 
 import sys
 from computer.platform_base import PlatformController
-from computer.platform_windows import WindowsPlatformController
 
 _CURRENT_PLATFORM: PlatformController | None = None
 
@@ -20,12 +19,19 @@ def get_platform_controller() -> PlatformController:
                 from computer.platform_macos import MacOSPlatformController
                 _CURRENT_PLATFORM = MacOSPlatformController()
             except ImportError:
+                from computer.platform_windows import WindowsPlatformController
                 _CURRENT_PLATFORM = WindowsPlatformController()
         elif sys.platform == "win32":
+            from computer.platform_windows import WindowsPlatformController
             _CURRENT_PLATFORM = WindowsPlatformController()
         else:
             # Fallback for Linux or unspecified platforms
-            _CURRENT_PLATFORM = WindowsPlatformController()
+            try:
+                from computer.platform_windows import WindowsPlatformController
+                _CURRENT_PLATFORM = WindowsPlatformController()
+            except Exception:
+                from computer.platform_macos import MacOSPlatformController
+                _CURRENT_PLATFORM = MacOSPlatformController()
     return _CURRENT_PLATFORM
 
 

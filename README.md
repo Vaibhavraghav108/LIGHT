@@ -56,6 +56,7 @@
    ollama run qwen3:1.7b
    ```
 5. **Voice Input**: If Handy desktop is installed, LIGHT reads from `~/Library/Application Support/com.pais.handy/history.db`. If Handy is not present, LIGHT gracefully operates with voice listening idle.
+6. **macOS PyObjC Frameworks**: `requirements.txt` specifies `pyobjc-core`, `pyobjc-framework-Quartz`, and `pyobjc-framework-Cocoa` using `sys_platform == 'darwin'` markers for PyAutoGUI automation.
 
 ### 1. Environment Setup & Dependencies
 From PowerShell in the project root:

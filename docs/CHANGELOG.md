@@ -22,6 +22,9 @@
 - Added [`tests/test_macos_smoke.py`](file:///c:/Projects/LIGHT/tests/test_macos_smoke.py) (4 opt-in host smoke tests).
 - Total automated discovery test suite expanded to **145 tests: 137 passed, 8 skipped, 0 failures, 0 errors**.
 
+### Fixed
+- **macOS CI Dependencies & Platform-Aware Assertions**: Added `pyobjc-core`, `pyobjc-framework-Quartz`, and `pyobjc-framework-Cocoa` with `sys_platform == 'darwin'` markers in `requirements.txt` for PyAutoGUI automation on macOS runners. Made unit test assertions in `tests/test_computer.py`, `tests/test_new_features.py`, `tests/test_voice.py`, and `tests/test_voice_provider.py` platform-aware across Windows and macOS. Added `fail-fast: false` to the CI matrix.
+
 ---
 
 ## [Commit d9ad00c / PR #2] — 2026-10-04

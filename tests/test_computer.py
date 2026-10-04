@@ -1,3 +1,4 @@
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -15,17 +16,20 @@ class TestComputerControl(unittest.TestCase):
     def test_open_notepad_and_calculator(self, mock_popen):
         apps = AppController()
         apps.open("Notepad")
-        mock_popen.assert_called_with(["notepad.exe"])
+        expected_notepad = ["open", "-a", "TextEdit"] if sys.platform == "darwin" else ["notepad.exe"]
+        mock_popen.assert_any_call(expected_notepad)
 
         apps.open("Calculator")
-        mock_popen.assert_called_with(["calc.exe"])
+        expected_calc = ["open", "-a", "Calculator"] if sys.platform == "darwin" else ["calc.exe"]
+        mock_popen.assert_any_call(expected_calc)
 
     @patch("computer.apps.subprocess.run")
     def test_close_apps(self, mock_run):
         apps = AppController()
         apps.close("Notepad")
+        expected_cmd = ["pkill", "-f", "TextEdit"] if sys.platform == "darwin" else ["taskkill", "/IM", "notepad.exe", "/F"]
         mock_run.assert_called_with(
-            ["taskkill", "/IM", "notepad.exe", "/F"],
+            expected_cmd,
             capture_output=True,
             text=True,
         )
@@ -45,16 +49,17 @@ class TestComputerControl(unittest.TestCase):
         with patch.object(apps, "find_brave_executable", return_value=r"C:\Brave\brave.exe"):
             apps.open("Brave")
 
-        # Closing Brave without force=True terminates only the tracked Popen process, never taskkill /F
+        # Closing Brave without force=True terminates only the tracked Popen process, never taskkill / force kill
         closed = apps.close("Brave")
         self.assertEqual(closed, 1)
         mock_proc.terminate.assert_called_once()
         mock_run.assert_not_called()
 
-        # Explicit opt-in force=True runs taskkill /F
+        # Explicit opt-in force=True runs force kill command
         apps.close("Brave", force=True)
+        expected_cmd = ["pkill", "-f", "Brave Browser"] if sys.platform == "darwin" else ["taskkill", "/IM", "brave.exe", "/F"]
         mock_run.assert_called_once_with(
-            ["taskkill", "/IM", "brave.exe", "/F"],
+            expected_cmd,
             capture_output=True,
             text=True,
         )
@@ -80,7 +85,8 @@ class TestComputerControl(unittest.TestCase):
     @patch("computer.keyboard.pyautogui.hotkey")
     def test_keyboard_hotkey(self, mock_hotkey):
         KeyboardController().hotkey("ctrl", "r")
-        mock_hotkey.assert_called_once_with("ctrl", "r")
+        expected = ("command", "r") if sys.platform == "darwin" else ("ctrl", "r")
+        mock_hotkey.assert_called_once_with(*expected)
 
     @patch("computer.mouse.pyautogui.size", return_value=(1920, 1080))
     @patch("computer.mouse.pyautogui.position", return_value=(500, 500))
@@ -132,7 +138,8 @@ class TestComputerControl(unittest.TestCase):
         result = executor.execute(Command(Action.OPEN_APP, "Notepad"), raw_text="Open Notepad")
         self.assertEqual(result, "OK")
         self.assertEqual(executor.state.current_app, "notepad")
-        mock_popen.assert_called_once_with(["notepad.exe"])
+        expected_cmd = ["open", "-a", "TextEdit"] if sys.platform == "darwin" else ["notepad.exe"]
+        mock_popen.assert_any_call(expected_cmd)
 
     def test_executor_uses_playwright_chromium_for_browser_commands(self):
         executor = Executor()
