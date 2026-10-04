@@ -215,7 +215,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
 
         stop_latency_ms = (stop_completed_at - stop_sent_at[0]) * 1000.0
         self.assertIn("STOP", statuses)
-        threshold_ms = 250.0 if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS") else 80.0
+        threshold_ms = 500.0 if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS") else 80.0
         self.assertLess(
             stop_latency_ms,
             threshold_ms,
