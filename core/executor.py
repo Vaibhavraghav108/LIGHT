@@ -448,6 +448,8 @@ class Executor:
             with self._agent_lock:
                 self._agent_thread = worker_thread
             worker_thread.start()
+            self.state.record_command(raw_text, command)
+            return "OK"
 
         # ==========================================
         # WAIT
@@ -457,6 +459,8 @@ class Executor:
             seconds = float(target) if target else DEFAULT_WAIT_SECONDS
             log_executor(f"Waiting {seconds} seconds...")
             self._sleep_interruptible(seconds, cancel_event=cancel_event)
+            self.state.record_command(raw_text, command)
+            return "OK"
 
         # ==========================================
         # STOP

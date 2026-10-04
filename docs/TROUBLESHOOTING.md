@@ -393,3 +393,34 @@ AssertionError: expected call not found. Expected: Popen(['notepad.exe']) Actual
 - `tests/test_computer.py::TestComputerControl::test_keyboard_hotkey`
 - `tests/test_new_features.py::TestNewFeatures::test_05_hotkey_execution`
 - `tests/test_voice.py::TestHandyVoiceAndLoop::test_ensure_single_instance_kills_stale_pids_and_writes_current_pid`
+
+---
+
+## Issue 14 — Post-Action Observation Sync Overhead on Interruptible Actions (WAIT / AGENT_TASK)
+
+### Problem
+On macOS CI runners, three timing tests (`test_12_stop_preemption_interrupts_wait_under_5ms`, `test_45_agent_task_dispatch_is_non_blocking`, and `test_03_stop_and_cancel_priority_preempts_wait_and_queued_commands`) failed timing assertions with latencies of 139ms–207ms against thresholds of 50ms–80ms.
+
+### Symptoms
+```text
+AssertionError: 207.41 not less than 50.0 (test_12_stop_preemption_interrupts_wait_under_5ms)
+AssertionError: 188.74 not less than 50.0 (test_45_agent_task_dispatch_is_non_blocking)
+AssertionError: 139.32 not less than 80.0 : Expected STOP to interrupt 10s WAIT within 80ms (test_03_stop_and_cancel_priority_preempts_wait_and_queued_commands)
+```
+
+### Root Cause
+In `core/executor.py`, after executing `Action.WAIT` and `Action.AGENT_TASK`, execution fell through to `self.state.sync_observation(browser=self.browser, screen=self.screen)`:
+1. `WAIT` does not alter active windows, URLs, or mouse position, making post-action observation synchronization redundant.
+2. `AGENT_TASK` runs asynchronously on `LIGHT-AgentWorker` and transfers browser ownership to `BrowserOwnership.AGENT`, making synchronous browser inspection on dispatch redundant.
+3. On macOS, `screen.get_foreground_window_info()` executes AppleScript via `osascript`, taking 50ms–150ms per process invocation. Running this synchronously inside `WAIT` wakeups and `AGENT_TASK` dispatch severely inflated latency and broke STOP preemption contracts.
+
+### Fix
+In [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py), updated `Action.AGENT_TASK` and `Action.WAIT` to record the command in `self.state` and return `"OK"` immediately, bypassing redundant post-action observation sync and AppleScript subprocess execution.
+
+### Relevant Files
+- [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
+
+### Regression Test
+- `tests/test_new_features.py::TestNewFeatures::test_12_stop_preemption_interrupts_wait_under_5ms`
+- `tests/test_new_features.py::TestNewFeatures::test_45_agent_task_dispatch_is_non_blocking`
+- `tests/test_queue_and_llm.py::TestProducerConsumerQueueAndLLM::test_03_stop_and_cancel_priority_preempts_wait_and_queued_commands`

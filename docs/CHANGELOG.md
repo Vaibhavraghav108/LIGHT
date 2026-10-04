@@ -24,6 +24,7 @@
 
 ### Fixed
 - **macOS CI Dependencies & Platform-Aware Assertions**: Added `pyobjc-core`, `pyobjc-framework-Quartz`, and `pyobjc-framework-Cocoa` with `sys_platform == 'darwin'` markers in `requirements.txt` for PyAutoGUI automation on macOS runners. Made unit test assertions in `tests/test_computer.py`, `tests/test_new_features.py`, `tests/test_voice.py`, and `tests/test_voice_provider.py` platform-aware across Windows and macOS. Added `fail-fast: false` to the CI matrix.
+- **Latency Optimization for WAIT & AGENT_TASK**: Updated `Action.WAIT` and `Action.AGENT_TASK` in `core/executor.py` to return directly after recording the command, eliminating redundant post-action observation sync and AppleScript subprocess overhead during STOP preemption and background agent task dispatch.
 
 ---
 
