@@ -1,208 +1,137 @@
-# LIGHT — Comprehensive Testing Guide
+# LIGHT Testing Guide
 
-> **Test Suite Baseline**: Running the automated test discovery command discovers **155 tests**: **147 execute and pass**, **0 fail**, **0 errors**, and **8 opt-in host smoke tests skip by default (`OK (skipped=8)`)**.
+## Dated `v0.5.0` baseline
 
----
+The tagged release (`8524bde`, 2026-10-04) discovers **155 tests**. GitHub
+Actions run `python -m unittest discover -s tests -v` on Python 3.12 for both
+`windows-latest` and `macos-latest`; the main-branch run after merge passed both
+jobs with **147 passing and 8 skipped** in each matrix environment.
 
-## 1. Test Architecture Overview
+The eight skips are four Windows and four macOS opt-in host smoke tests. A green
+default suite therefore does not mean physical voice, clipboard, display,
+permission, or application behavior was exercised.
 
-LIGHT employs a multi-tiered test suite to guarantee safety, deterministic accuracy, low-latency execution, and non-regression across all desktop and browser subsystems on both Windows and macOS:
+During the 2026-10-04 documentation audit, the first Windows run discovered 155
+tests but reported **146 passing, 8 skipped, 1 error** because the real local
+browser copy-range test could not open the host clipboard. An immediate targeted
+rerun of that test passed, identifying a transient host clipboard condition
+rather than a deterministic source failure. The result was not hidden or
+converted into a skip; source and tests were not changed by this documentation
+milestone. After the targeted pass, the final full rerun completed in 26.050s
+with **147 passing and 8 skipped**.
 
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                   LIGHT MULTI-TIER TEST SUITE (155 TESTS)              │
-├────────────────────────────────┬───────────────────────────────────────┤
-│ Tier 1: Deterministic Unit     │ 59 Tests across voice providers, brain│
-│ (Isolated Mocks, <1ms parsing) │ desktop apps, screen, and macOS mocks.│
-├────────────────────────────────┼───────────────────────────────────────┤
-│ Tier 2: Real Local Browser     │ 5 Headless Playwright integration     │
-│ (ThreadingHTTPServer + DOM)    │ tests against local HTML fixtures.    │
-├────────────────────────────────┼───────────────────────────────────────┤
-│ Tier 3: Queue, LLM Planning,   │ 83 Tests covering queue, Qwen planner,│
-│ Reliability & Advanced Features│ background agent worker, and ranking. │
-├────────────────────────────────┼───────────────────────────────────────┤
-│ Tier 4: Opt-In Host Smoke      │ 8 Host environment checks (4 Windows, │
-│ (LIGHT_RUN_*_SMOKE=1)          │ 4 macOS) skipped by default.          │
-└────────────────────────────────┴───────────────────────────────────────┘
-```
+## Test layers
 
----
+| Layer | Files | Count | What it proves | What it does not prove |
+| --- | --- | ---: | --- | --- |
+| Unit/parser/platform mocks | `test_laya`, `test_voice*`, `test_computer`, `test_browser`, `test_platform_macos` | 59 | parsing, routing, validation, provider behavior, platform commands | real OS permissions/hardware/GUI results |
+| Local real-browser integration | `test_integration_local_browser` | 5 | headless Chromium against localhost DOM; copy path reaches real clipboard | public websites, real display coordinates, clipboard availability everywhere |
+| Queue/LLM/reliability | `test_queue_and_llm`, `test_new_features` | 83 | concurrency, cancellation, normalization, ownership, agent lifecycle with mocks/local pages | live Ollama or a full Browser Use research run |
+| Opt-in host smoke | `test_windows_smoke`, `test_macos_smoke` | 8 | selected browser, clipboard, display, and provider observations on the current host | destructive actions or full end-to-end voice workflow |
 
-## 2. Test Execution Commands
+Per-file counts: voice 6, voice provider 5, Laya 16, computer 14,
+macOS platform 9, browser 9, local browser 5, queue/LLM 25, new features 58,
+Windows smoke 4, macOS smoke 4.
 
-### 2.1 Full Automated Discovery Suite (Default CI & Local Baseline)
-Executes all 147 unit and local browser integration tests across the repository:
+## Stable commands
+
+Windows PowerShell:
 
 ```powershell
 .\lightenv\Scripts\python.exe -m unittest discover -s tests -v
+.\lightenv\Scripts\python.exe -m compileall -q main.py config.py voice brain computer browser core utils tests
+.\lightenv\Scripts\python.exe -m pip check
+git diff --check
 ```
 
-On macOS / Linux:
+macOS:
+
 ```bash
-python -m unittest discover -s tests -v
+./lightenv/bin/python -m unittest discover -s tests -v
+./lightenv/bin/python -m compileall -q main.py config.py voice brain computer browser core utils tests
+./lightenv/bin/python -m pip check
+git diff --check
 ```
 
-**Expected Baseline Output**:
-```text
-Ran 155 tests in ~28s
-OK (skipped=8)
-```
-
-### 2.2 Static Syntax & Compilation Check
-Verifies that all Python modules compile cleanly without syntax errors:
+Target one module with, for example:
 
 ```powershell
-.\lightenv\Scripts\python.exe -m compileall -q main.py config.py voice brain computer browser core utils tests
+.\lightenv\Scripts\python.exe -m unittest tests.test_queue_and_llm -v
 ```
 
-### 2.3 Individual Subsystem Test Runs
+Use importable dotted module names for the most portable command form.
 
-| Subsystem | Target Test File | Test Command | Tests |
-| :--- | :--- | :--- | :---: |
-| **Voice & Handy Loop** | `tests/test_voice.py` | `python -m unittest tests/test_voice.py -v` | 6 |
-| **Voice Providers** | `tests/test_voice_provider.py` | `python -m unittest tests/test_voice_provider.py -v` | 5 |
-| **Laya & Intent Parsing** | `tests/test_laya.py` | `python -m unittest tests/test_laya.py -v` | 16 |
-| **Desktop & Computer** | `tests/test_computer.py` | `python -m unittest tests/test_computer.py -v` | 14 |
-| **macOS Platform Unit** | `tests/test_platform_macos.py` | `python -m unittest tests/test_platform_macos.py -v` | 9 |
-| **Browser Unit** | `tests/test_browser.py` | `python -m unittest tests/test_browser.py -v` | 9 |
-| **Local Browser Integration**| `tests/test_integration_local_browser.py` | `python -m unittest tests/test_integration_local_browser.py -v`| 5 |
-| **V2 Queue & LLM Planning** | `tests/test_queue_and_llm.py` | `python -m unittest tests/test_queue_and_llm.py -v` | 25 |
-| **Reliability & Ownership** | `tests/test_new_features.py` | `python -m unittest tests/test_new_features.py -v` | 58 |
-| **Opt-In Windows Smoke** | `tests/test_windows_smoke.py` | `$env:LIGHT_RUN_WINDOWS_SMOKE="1"; python -m unittest tests/test_windows_smoke.py -v` | 4 |
-| **Opt-In macOS Smoke** | `tests/test_macos_smoke.py` | `LIGHT_RUN_MACOS_SMOKE=1 python -m unittest tests/test_macos_smoke.py -v` | 4 |
+## Opt-in host smoke tests
 
----
+These checks interact with the current host but remain non-destructive:
 
-## 3. Detailed Test Suite Inventory
+```powershell
+$env:LIGHT_RUN_WINDOWS_SMOKE="1"
+.\lightenv\Scripts\python.exe -m unittest tests.test_windows_smoke -v
+```
 
-### Tier 1: Deterministic Unit Tests (59 Tests)
-- **`tests/test_voice.py` (6 tests)**:
-  - Missing Handy database handling (`FileNotFoundError`).
-  - Empty `transcription_history` handling (`None` return).
-  - Latest transcription retrieval with monotonic ID ordering.
-  - Malformed database schema recovery (`RuntimeError`).
-  - Voice loop debouncing and SQLite locked-database error recovery.
-  - Single-instance process cleanup (`ensure_single_instance`).
-- **`tests/test_laya.py` (16 tests)**:
-  - Deterministic command mapping across all `Action` enum variants.
-  - Context-aware search destination routing (YouTube vs Google).
-  - Direct copy commands (`"copy text <phrase>"`) and delimiter boundary slicing (`|||`).
-  - Mouse movement variants and ambiguous phrase protection.
-  - Rejection of malformed/incomplete commands (`"Open"`, `"Search"`, `"Copy from"`).
-  - Safety rejection of casual speech (`"How are you"`, `"I am hungry"`) and single unrelated words (`"Cricket"`).
-- **`tests/test_computer.py` (14 tests)**:
-  - App launch/close for `Notepad` and `Calculator`, including tracked-process-only normal shutdown.
-  - Protected browser termination ensuring only LIGHT-tracked PIDs are terminated.
-  - Controlled browser session management and state updates.
-  - Mouse relative movements, boundary clamping, and anchor point homing.
-  - Keyboard focus typing, key presses, and system hotkey dispatch.
-  - Unknown application error handling.
-- **`tests/test_browser.py` (9 tests)**:
-  - URL normalization and standard website shortcut expansion.
-  - Navigation controls (`go_back`, `go_forward`, `refresh`, `scroll`).
-  - High-DPI viewport-to-screen coordinate math.
-  - Browser start fallback chain from inaccessible Brave to Playwright Chromium.
-  - Google reCAPTCHA `/sorry/` detection and automatic DuckDuckGo fallback.
-  - End-to-end mocked context loop execution and verified clipboard failure handling.
+```bash
+LIGHT_RUN_MACOS_SMOKE=1 ./lightenv/bin/python -m unittest tests.test_macos_smoke -v
+```
 
-### Tier 2: Real Local-Browser Playwright Integration Tests (5 Tests)
-- **`tests/test_integration_local_browser.py` (5 tests)**:
-  - Spins up a real `ThreadingHTTPServer` on `127.0.0.1` serving local HTML test fixtures (`index.html`, `page2.html`).
-  - Launches headless Playwright Chromium via `BrowserController(headless=True)`.
-  - **Test 1**: Page title and visible text reading against live DOM.
-  - **Test 2**: Search bar element location and text typing.
-  - **Test 3**: Visible element detection skipping hidden duplicates (`display: none`).
-  - **Test 4**: Result selection by index and window scroll tracking.
-  - **Test 5**: Inclusive text range copying, casing preservation, and DOM highlight cleanup (`clear_highlights`).
+Run the matching suite only on its OS. Record the machine type, permissions,
+voice-provider availability, and exact output. Never infer physical Mac success
+from `macos-latest` CI.
 
-### Tier 3: Queue, LLM Planning & Feature Reliability (83 Tests)
-- **`tests/test_queue_and_llm.py` (25 tests)**:
-  - Producer-consumer command queue prioritizing `CommandPriority.STOP`.
-  - Immediate STOP preemption interrupting active `WAIT` actions.
-  - Background voice ingestion decoupled from synchronous command execution.
-  - Rapid stress sequences preserving exact queue order and zero dropped transcriptions.
-  - Fast-path verification confirming zero LLM calls for 22 deterministic commands.
-  - Local Qwen3 1.7B planning, prompt construction, and plan normalization.
-  - Google reCAPTCHA fallback, closed-context browser recovery, and skip button verification.
-  - Pruning downstream dependent commands on prerequisite failure without crossing utterance boundaries.
-- **`tests/test_new_features.py` (58 tests)**:
-  - Foreground-aware typing and active window verification (`computer/screen.py`).
-  - Windows window controls (minimize, maximize, restore, switch) and media keys.
-  - Autonomous browser agent initialization with local Ollama (`qwen3:1.7b`).
-  - Event-loop-safe async agent execution (`execute_task`) without `asyncio.run()` collisions.
-  - Immediate agent task cancellation upon voice STOP.
-  - GitHub search integration (`search_github`) and result container selectors.
-  - Target candidate scoring and ranking prioritizing official repos over math papers.
-  - Semantic post-click destination verification (`verify_destination`).
-  - Rejection of inactive/unchanged destinations and STOP-cancellable verification waits.
-  - Browser ownership lifecycle transitions (`NONE` $\to$ `LIGHT` $\to$ `AGENT` $\to$ `NONE`).
-  - Atomic background-agent admission and ownership preservation during isolated deterministic commands.
-  - STOP state cleanup and Browser Use local/privacy defaults.
-  - Concurrent execution of desktop commands while an autonomous agent runs.
-  - **Background Agent Execution (Tests 45–52 / A–H)**:
-    - `test_45_agent_task_runs_in_background_without_blocking_executor`: Verifies `AGENT_TASK` runs in `LIGHT-AgentWorker` thread while executor returns immediately with `"OK"`.
-    - `test_46_normal_commands_execute_immediately_while_agent_runs`: Verifies `"Open YouTube"` and `"Type Hello"` execute with near-zero wait during active agent research.
-    - `test_47_duplicate_agent_task_is_rejected_while_one_is_running`: Verifies duplicate `AGENT_TASK` returns `"REJECTED"` without starting redundant workers.
-    - `test_48_stop_preempts_background_agent_worker`: Verifies voice STOP preemption cancels agent task and joins worker thread within bounded timeout.
-    - `test_49_loop_shutdown_joins_agent_worker`: Verifies consumer loop shutdown cleanly closes and joins background worker without hanging.
-    - `test_50_agent_worker_failure_resets_state`: Verifies worker exception cleanly clears `state.agent_running` and restores ownership.
-    - `test_51_async_loop_executes_normal_command_while_agent_runs`: Verifies async consumer loop executes normal commands while agent runs in background.
-    - `test_52_interleaved_desktop_and_browser_commands_during_agent_task`: Verifies complex interleaved sequences of desktop and browser actions during active background agent task.
+## Critical regression areas
 
-### Tier 4: Opt-In Windows Host Smoke Tests (4 Tests)
-- **`tests/test_windows_smoke.py` (4 tests, skipped by default)**:
-  - Enabled exclusively when `$env:LIGHT_RUN_WINDOWS_SMOKE="1"`.
-  - Verifies local Brave/Chrome executable discovery.
-  - Verifies system clipboard write/read round-trip via `pyperclip`.
-  - Verifies live screen dimensions, cursor tracking, and active window titles.
-  - Verifies non-destructive read access to the host's actual Handy `history.db`.
+- explicit STOP signaling, queue priority, queue clearing, and interruptible
+  wait behavior;
+- listener independence under a slow executor and rapid ordered transcripts;
+- failed-plan pruning without cross-utterance cancellation;
+- deterministic fast paths making zero Qwen calls;
+- malformed, unavailable, and control-token LLM output;
+- Browser Use admission races, duplicate rejection, result state, shutdown, and
+  ownership preservation during deterministic browser work;
+- inactive/unchanged/mismatched named destinations and cancellable verification;
+- clipboard read-back failures and platform modifier routing;
+- tracked-process-only normal close and explicit-force separation;
+- unavailable voice provider, locked/malformed SQLite, and duplicate speech;
+- Windows/macOS platform command mapping without shared-module OS leakage.
 
-### Tier 5: Opt-In macOS Host Smoke Tests (4 Tests)
-- **`tests/test_macos_smoke.py` (4 tests, skipped by default)**:
-  - Enabled exclusively when `LIGHT_RUN_MACOS_SMOKE="1"` on a physical or hosted macOS environment.
-  - Verifies macOS Google Chrome / Brave application bundle discovery.
-  - Verifies system clipboard write/read round-trip via `pyperclip`.
-  - Verifies screen dimensions and Retina display scale factor detection.
-  - Verifies voice provider initialization and graceful fallback behavior.
+## Timing tests
 
----
+Timing assertions test bounded behavior, not universal hardware performance.
+Virtualized runners have scheduler jitter, and historical macOS CI failures led
+to removal of unnecessary observation subprocesses and CI-tolerant end-to-end
+thresholds. Keep the semantic requirement separate from the threshold:
 
-## 4. Critical Verification Workflows
+- direct STOP event signaling targets under 5ms after ingestion;
+- a running `WAIT` may wake on OS scheduling later than the signal;
+- agent dispatch must return promptly without waiting for research;
+- bounded joins protect shutdown latency but do not prove a third-party thread
+  has terminated.
 
-The test suite validates three mission-critical end-to-end workflows:
+## CI behavior
 
-### Critical Workflow 1: Compound GitHub Search & Official Repository Navigation
-- **Spoken Text**: `"Open GitHub, search for LangGraph and open the official repository."`
-- **Expected Flow**:
-  1. `parse_multi_command` deterministically yields 3 actions:
-     - `OPEN_URL("https://github.com")`
-     - `SEARCH("github:LangGraph")`
-     - `CLICK_RESULT("official repository")`
-  2. `Executor` opens GitHub, recognizes active site `github`, and executes repository search without injecting Google URLs.
-  3. `LightState` preserves `current_site = "github"` and `last_search_query = "LangGraph"`.
-  4. `locate_element_in_viewport` ranks candidate links on page:
-     - Scores `langchain-ai/langgraph` link (+120 domain, +80 slug, +50 official = 250).
-     - Rejects unrelated or social links.
-  5. Clicks official repository link and triggers `verify_destination()`.
-  6. Verifies landing URL contains `github.com` and `langgraph`; confirms page title matches repository; reports `[EXECUTOR] OK`.
-  7. If user utters a continuation like `"Official repository"`, context-aware parsing routes it directly to `CLICK_RESULT("official repository")` without re-searching Google or converting to an invalid `OPEN_URL`.
+`.github/workflows/tests.yml` installs core dependencies plus pinned optional
+agent packages, installs Playwright Chromium, compiles the tree, and runs full
+discovery. Its matrix is `windows-latest` and `macos-latest`, with fail-fast
+disabled. Pull requests to `main` always run; push filters cover `main`,
+`feature/*`, `fix/*`, and `refactor/*`. A `docs/*` push alone does not run, but a
+pull request to `main` does.
 
-### Critical Workflow 2: Concurrent Desktop Commands & STOP During Agent Task
-- **Scenario**: Autonomous agent task running in background while user issues desktop commands.
-- **Expected Flow**:
-  1. `AGENT_TASK` starts; browser ownership transitions to `BrowserOwnership.AGENT`.
-  2. Browser Use launches its own isolated browser session.
-  3. User says `"Open Notepad"` or `"Hotkey ctrl+c"`.
-  4. Desktop controllers execute immediately without blocking on or waiting for the autonomous agent.
-  5. User says `"Stop"`.
-  6. Once the transcription reaches `ingest_text()`, STOP is detected in <5ms, `cancel_event` is set, and `executor.browser_agent.cancel()` is called. Voice polling/STT time is outside this processing measurement.
-  7. Agent halts immediately, state resets cleanly, and browser ownership returns to `BrowserOwnership.NONE`.
+The install currently emits/resolves into a known metadata inconsistency:
+`browser-use==0.13.10` pins `click==8.3.3`, while installed
+`huggingface-hub` requires `click>=8.4.2,<9`. `pip check` therefore fails even
+though tests and CI pass. Track this separately; do not weaken tests or conceal
+the conflict.
 
-### Critical Workflow 3: Wrong Browser Result Rejection & Verification Failure
-- **Scenario**: Search results return irrelevant or malicious links, or page navigates to a mismatched target.
-- **Expected Flow**:
-  1. User requests `"Click official repository"`.
-  2. If visible links in viewport do not meet the minimum confidence score (score < 20), `BrowserController` fails safely with `RuntimeError` rather than blindly clicking result #1.
-  3. If a click occurs but the destination page lands on an unrelated site (e.g. `mathworld.com/graph-paper` for a LangGraph search), `verify_destination()` detects domain and content mismatch.
-  4. `BrowserController` raises `RuntimeError("Semantic verification failed")`.
-  5. `Executor` logs failure and refuses to return `[EXECUTOR] OK`.
+## Result reporting standard
+
+For every change report:
+
+1. exact commit/branch and OS;
+2. exact commands;
+3. discovered, passed, failed, errored, and skipped counts;
+4. whether Playwright, clipboard, GUI, microphone, Ollama, and Browser Use were
+   real, mocked, skipped, or unavailable;
+5. CI links and separate Windows/macOS conclusions;
+6. known dependency or environment warnings.
+
+“Tests pass” is insufficient when any layer was skipped or blocked.

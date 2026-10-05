@@ -1,13 +1,16 @@
 # LIGHT — Architecture Decision Records (ADRs)
 
-> **Context**: This document captures the rationale, trade-offs, and consequences of critical technical and architectural decisions in the **LIGHT** repository.
+This file preserves the rationale, trade-offs, and consequences of critical
+technical decisions. **Active** decisions govern `v0.5.0`; **Historical**
+decisions explain earlier behavior but no longer govern it; **Superseded**
+decisions identify their replacement. No ADR is currently superseded.
 
 ---
 
 # ADR-001 — Deterministic-First Hybrid Brain Architecture
 
 ## Status
-Accepted
+Active
 
 ## Decision
 Route high-frequency, structured voice commands through deterministic regex and grammatical parsers (`brain/decision.py`) as the primary execution path, reserving the local Large Language Model (Qwen3 1.7B) exclusively for complex, multi-clause natural language search and browsing tasks.
@@ -18,18 +21,18 @@ Route high-frequency, structured voice commands through deterministic regex and 
 3. **Resource Efficiency**: Avoids continuous CPU/GPU load from running an LLM on every spoken utterance.
 
 ## Consequences
-- **Positive**: Near-instantaneous response times for 90%+ of common voice commands; 100% predictable action outputs.
+- **Positive**: Near-instantaneous response for recognized common commands and predictable parser output without model sampling.
 - **Negative**: Grammars and regex patterns must be maintained for new deterministic command forms.
 
 ## Related Components
-- [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py), [`brain/laya.py`](file:///c:/Projects/LIGHT/brain/laya.py), [`brain/llm.py`](file:///c:/Projects/LIGHT/brain/llm.py)
+- [`brain/decision.py`](../brain/decision.py), [`brain/laya.py`](../brain/laya.py), [`brain/llm.py`](../brain/llm.py)
 
 ---
 
 # ADR-002 — Local Qwen3 1.7B via Ollama for Complex Planning
 
 ## Status
-Accepted
+Active
 
 ## Decision
 Standardize the natural language planning model on local **Qwen3 1.7B** served via Ollama (`http://127.0.0.1:11434`), explicitly avoiding remote cloud LLMs (OpenAI, Anthropic) for core planning.
@@ -40,18 +43,18 @@ Standardize the natural language planning model on local **Qwen3 1.7B** served v
 3. **Hardware Fit**: Qwen3 1.7B delivers high instruction-following fidelity for JSON action generation while fitting comfortably within low VRAM or standard CPU limits.
 
 ## Consequences
-- **Positive**: No API costs, no rate limits, zero data exfiltration.
+- **Positive**: No cloud-LLM API cost or rate limit, and planning text stays on the configured Ollama endpoint (localhost by default).
 - **Negative**: Small models can produce thinking tokens (`<think>`, `/no_think`) or syntax quirks that require post-generation normalization (`normalize_command_plan`).
 
 ## Related Components
-- [`brain/llm.py`](file:///c:/Projects/LIGHT/brain/llm.py), [`config.py`](file:///c:/Projects/LIGHT/config.py)
+- [`brain/llm.py`](../brain/llm.py), [`config.py`](../config.py)
 
 ---
 
 # ADR-003 — Decoupled Producer-Consumer Command Queue
 
 ## Status
-Accepted
+Active
 
 ## Decision
 Decouple speech-to-text audio ingestion from action execution using a thread-safe, prioritized producer-consumer queue (`core/queue_manager.py`).
@@ -61,18 +64,18 @@ Decouple speech-to-text audio ingestion from action execution using a thread-saf
 2. **Preemption**: A queue enables immediate out-of-band preemption for emergency `"Stop"` commands without waiting for prior commands to finish executing.
 
 ## Consequences
-- **Positive**: Voice listener never drops transcriptions; emergency stop commands are signalled in <5ms after ingestion; dependent commands can be pruned on failure.
+- **Positive**: Voice ingestion is decoupled from execution; emergency stop signaling targets <5ms after ingestion; dependent commands can be pruned on failure.
 - **Negative**: Requires thread-safe state synchronization and intermediate planning state clones (`LightState.clone_for_planning()`).
 
 ## Related Components
-- [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py), [`core/queue_manager.py`](file:///c:/Projects/LIGHT/core/queue_manager.py), [`core/state.py`](file:///c:/Projects/LIGHT/core/state.py)
+- [`core/loop.py`](../core/loop.py), [`core/queue_manager.py`](../core/queue_manager.py), [`core/state.py`](../core/state.py)
 
 ---
 
 # ADR-004 — Dual-Engine Browser Automation (Playwright Primary, Browser Use Subordinate)
 
 ## Status
-Accepted
+Active
 
 ## Decision
 Retain Playwright Chromium as LIGHT's primary deterministic browser automation engine, while integrating Browser Use as an isolated, subordinate agent invoked exclusively for open-ended exploratory research goals (`AGENT_TASK`).
@@ -87,14 +90,14 @@ Retain Playwright Chromium as LIGHT's primary deterministic browser automation e
 - **Negative**: Requires careful session isolation to prevent the two browser controllers from colliding.
 
 ## Related Components
-- [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py), [`browser/agent.py`](file:///c:/Projects/LIGHT/browser/agent.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
+- [`browser/browser.py`](../browser/browser.py), [`browser/agent.py`](../browser/agent.py), [`core/executor.py`](../core/executor.py)
 
 ---
 
 # ADR-005 — Strict Three-State Browser Ownership Model
 
 ## Status
-Accepted
+Active
 
 ## Decision
 Enforce a formal ownership lifecycle (`BrowserOwnership.NONE`, `LIGHT`, `AGENT`) tracked in `LightState` and managed by `Executor`. Browser Use and LIGHT's deterministic Playwright controller use separate browser sessions; `AGENT` remains authoritative while its worker is active.
@@ -108,14 +111,14 @@ Enforce a formal ownership lifecycle (`BrowserOwnership.NONE`, `LIGHT`, `AGENT`)
 - **Negative**: Subsystems must check and update ownership flags during state transitions.
 
 ## Related Components
-- [`core/state.py`](file:///c:/Projects/LIGHT/core/state.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
+- [`core/state.py`](../core/state.py), [`core/executor.py`](../core/executor.py)
 
 ---
 
 # ADR-006 — Highest-Priority Emergency STOP Ingestion Preemption (<5ms)
 
 ## Status
-Accepted
+Active
 
 ## Decision
 Assign highest priority to emergency cancellation phrases (`"Stop"`, `"Cancel"`, `"Quit"`, `"Exit"`), bypassing normal queue scheduling and immediately setting a global `cancel_event`.
@@ -130,14 +133,14 @@ Assign highest priority to emergency cancellation phrases (`"Stop"`, `"Cancel"`,
 - **Measurement Boundary**: Handy's 150ms polling interval plus STT/database publication precedes `ingest_text()` and is not included in the sub-5ms processing measurement.
 
 ## Related Components
-- [`core/queue_manager.py`](file:///c:/Projects/LIGHT/core/queue_manager.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
+- [`core/queue_manager.py`](../core/queue_manager.py), [`core/loop.py`](../core/loop.py), [`core/executor.py`](../core/executor.py)
 
 ---
 
 # ADR-007 — Multi-Feature Search Candidate Ranking Over Blind Result Selection
 
 ## Status
-Accepted
+Active
 
 ## Decision
 Replace blind "click result #1" fallbacks with a multi-feature candidate scoring algorithm that evaluates visible links in the viewport based on search context, domain match, repository slug patterns, and semantic authority.
@@ -151,14 +154,14 @@ Replace blind "click result #1" fallbacks with a multi-feature candidate scoring
 - **Negative**: Requires maintaining and tuning candidate ranking heuristics.
 
 ## Related Components
-- [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py)
+- [`browser/browser.py`](../browser/browser.py)
 
 ---
 
 # ADR-008 — Semantic Post-Click Destination Verification
 
 ## Status
-Accepted
+Active
 
 ## Decision
 Require explicit post-click destination verification (`verify_destination`) after clicking named search targets, validating landing page URL, domain, title, and body content against target query semantics.
@@ -172,14 +175,14 @@ Require explicit post-click destination verification (`verify_destination`) afte
 - **Negative**: Adds a brief post-click inspection window (~50–200ms) after page navigation commits.
 
 ## Related Components
-- [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
+- [`browser/browser.py`](../browser/browser.py), [`core/executor.py`](../core/executor.py)
 
 ---
 
 # ADR-009 — Foreground and Focus-Aware Desktop Typing
 
 ## Status
-Accepted
+Active
 
 ## Decision
 Enforce active foreground window and process verification (`computer/screen.py`) before dispatching OS keystrokes for `TYPE` commands.
@@ -190,20 +193,20 @@ Enforce active foreground window and process verification (`computer/screen.py`)
 
 ## Consequences
 - **Positive**: Prevents corrupted input and catastrophic typing errors in background programs.
-- **Negative**: Requires Windows Win32 API calls (`GetForegroundWindow`, `GetWindowTextW`) before keystroke generation.
+- **Negative**: Requires platform-specific foreground-window observation before keystroke generation and still has a small check-to-dispatch focus race.
 
 ## Related Components
-- [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py), [`computer/keyboard.py`](file:///c:/Projects/LIGHT/computer/keyboard.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
+- [`computer/screen.py`](../computer/screen.py), [`computer/keyboard.py`](../computer/keyboard.py), [`core/executor.py`](../core/executor.py)
 
 ---
 
 # ADR-010 — Managed Background Worker for Autonomous Agent Tasks (`LIGHT-AgentWorker`)
 
 ## Status
-Accepted
+Active
 
 ## Decision
-Execute long-running Browser Use autonomous agent tasks (`Action.AGENT_TASK`) in a dedicated managed background daemon thread (`LIGHT-AgentWorker`) managed by `core/executor.py`, returning immediately to the `LightLoop` consumer loop. Enforce single-active-worker semantics by rejecting duplicate concurrent agent requests (`ActionExecutionResult.REJECTED`).
+Execute long-running Browser Use autonomous agent tasks (`Action.AGENT_TASK`) in a dedicated managed background daemon thread (`LIGHT-AgentWorker`) managed by `core/executor.py`, returning immediately to the `LightLoop` consumer loop. Enforce single-active-worker semantics by rejecting duplicate concurrent agent requests with the executor result `"REJECTED"`.
 
 ## Reason
 1. **Consumer Thread Blocking**: Previously, `Executor.execute()` synchronously invoked `self.browser_agent.run_task(...)`. For open-ended web research tasks taking 2–7 minutes, this blocked the single consumer thread of `LightLoop`, preventing any normal commands (`"Open YouTube"`, `"Open Google"`, `"Close Notepad"`) from executing until the research task completed.
@@ -211,40 +214,40 @@ Execute long-running Browser Use autonomous agent tasks (`Action.AGENT_TASK`) in
 3. **Session Safety & Duplicate Prevention**: Running multiple concurrent Browser Use sessions would cause resource contention, CPU exhaustion, and WebDriver conflicts. Single-active-worker rejection ensures system stability while maintaining responsiveness.
 
 ## Consequences
-- **Positive**: Normal desktop and browser commands execute immediately without queuing delays (`queue_wait` <1ms); the user can multitask during long research tasks; emergency STOP and loop teardown safely join the worker thread within bounded timeouts (<300ms on STOP, 500ms on shutdown).
-- **Negative**: Requires thread-safe lifecycle tracking (`_agent_lock`, `_agent_thread`, `state._lock`) and bounded thread join management in `Executor` and `LightLoop`.
+- **Positive**: Normal commands are no longer held for the duration of agent research; the user can multitask; STOP and teardown make bounded join attempts.
+- **Negative**: Requires thread-safe lifecycle tracking and cannot guarantee termination inside the join window when a third-party dependency ignores cancellation.
 
 ## Related Components
-- [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py), [`browser/agent.py`](file:///c:/Projects/LIGHT/browser/agent.py), [`core/state.py`](file:///c:/Projects/LIGHT/core/state.py)
+- [`core/executor.py`](../core/executor.py), [`core/loop.py`](../core/loop.py), [`browser/agent.py`](../browser/agent.py), [`core/state.py`](../core/state.py)
 
 ---
 
 # ADR-011 — Cross-Platform Operating System Abstraction (`PlatformController`)
 
 ## Status
-Accepted
+Active
 
 ## Decision
 Introduce an abstract `PlatformController` interface (`computer/platform_base.py`) and factory (`computer/platform_factory.py`) with OS-specific implementations (`WindowsPlatformController`, `MacOSPlatformController`). High-level desktop controllers (`AppController`, `ScreenController`, `KeyboardController`, `MouseController`) and entry points (`main.py`) delegate OS-specific operations (app launching, process scanning/killing, window management, hotkey modifier mapping, screen scaling) to the active platform controller.
 
 ## Reason
 1. **Multi-Platform Support**: LIGHT must support macOS alongside Windows without duplicating high-level logic or branching on `sys.platform` throughout the codebase.
-2. **Preserving Existing Windows Contract**: Win32 APIs, DPI awareness, and PowerShell CIM process management remain 100% intact for Windows without regression.
+2. **Preserving Existing Windows Contract**: Win32 APIs, DPI awareness, and PowerShell process management remain in the Windows implementation with regression coverage.
 3. **Clean Encapsulation**: OS primitives (such as macOS `osascript` AppleScript execution and `open -a`, versus Windows Win32 `ctypes` and `taskkill`) are isolated within platform classes.
 
 ## Consequences
-- **Positive**: Enables full desktop automation on macOS; standardizes window management and modifier mappings; maintains 100% backward compatibility for all existing Windows unit and smoke tests.
+- **Positive**: Provides a macOS implementation and standardizes window management and modifier mappings while retaining Windows regression coverage.
 - **Negative**: Adds a layer of indirection for OS calls.
 
 ## Related Components
-- [`computer/platform_base.py`](file:///c:/Projects/LIGHT/computer/platform_base.py), [`computer/platform_windows.py`](file:///c:/Projects/LIGHT/computer/platform_windows.py), [`computer/platform_macos.py`](file:///c:/Projects/LIGHT/computer/platform_macos.py), [`computer/platform_factory.py`](file:///c:/Projects/LIGHT/computer/platform_factory.py), [`computer/apps.py`](file:///c:/Projects/LIGHT/computer/apps.py), [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py), [`computer/keyboard.py`](file:///c:/Projects/LIGHT/computer/keyboard.py), [`computer/mouse.py`](file:///c:/Projects/LIGHT/computer/mouse.py), [`main.py`](file:///c:/Projects/LIGHT/main.py)
+- [`computer/platform_base.py`](../computer/platform_base.py), [`computer/platform_windows.py`](../computer/platform_windows.py), [`computer/platform_macos.py`](../computer/platform_macos.py), [`computer/platform_factory.py`](../computer/platform_factory.py), [`computer/apps.py`](../computer/apps.py), [`computer/screen.py`](../computer/screen.py), [`computer/keyboard.py`](../computer/keyboard.py), [`computer/mouse.py`](../computer/mouse.py), [`main.py`](../main.py)
 
 ---
 
 # ADR-012 — Extensible Speech Ingestion (`VoiceInputProvider`)
 
 ## Status
-Accepted
+Active
 
 ## Decision
 Abstract speech ingestion behind the `VoiceInputProvider` interface (`voice/base.py`). Wrap Handy SQLite ingestion into `HandyVoiceProvider` (with `Handy` as a backward-compatible subclass). Provide `UnavailableVoiceProvider` and a dynamic factory (`voice/factory.py`) that checks for database availability and gracefully operates without crashing when no provider is active.
@@ -259,4 +262,59 @@ Abstract speech ingestion behind the `VoiceInputProvider` interface (`voice/base
 - **Negative**: When no provider is installed, voice commands cannot be ingested until a provider is configured.
 
 ## Related Components
-- [`voice/base.py`](file:///c:/Projects/LIGHT/voice/base.py), [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py), [`voice/unavailable_provider.py`](file:///c:/Projects/LIGHT/voice/unavailable_provider.py), [`voice/factory.py`](file:///c:/Projects/LIGHT/voice/factory.py), [`voice/handy.py`](file:///c:/Projects/LIGHT/voice/handy.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py)
+- [`voice/base.py`](../voice/base.py), [`voice/handy_provider.py`](../voice/handy_provider.py), [`voice/unavailable_provider.py`](../voice/unavailable_provider.py), [`voice/factory.py`](../voice/factory.py), [`voice/handy.py`](../voice/handy.py), [`core/loop.py`](../core/loop.py)
+
+---
+
+# ADR-013 — Scoped Normal Application Shutdown
+
+## Status
+Active
+
+## Decision
+Normal `AppController.close()` terminates only process objects recorded from a
+LIGHT launch. Image-wide termination commands are available only through an
+explicit `force=True` API path and are not selected by ordinary executor
+routing. A tracked macOS `open -a` launch may be followed by graceful
+AppleScript quit because the launcher exits before the application.
+
+## Reason
+Image-name termination can close unrelated user documents, tabs, or application
+instances. Tracking launch ownership supplies a defensible boundary for normal
+automation.
+
+## Consequences
+- **Positive**: Routine voice commands cannot silently force-kill an unrelated
+  application instance.
+- **Negative**: LIGHT cannot normally close an application it did not launch;
+  graceful macOS quit remains application-wide after a tracked launch.
+
+## Related Components
+- `computer/apps.py`, `computer/platform_windows.py`,
+  `computer/platform_macos.py`, `core/executor.py`
+
+---
+
+# ADR-014 — Workspace-Local Browser Use Defaults
+
+## Status
+Active
+
+## Decision
+Before Browser Use is lazily imported, default its configuration directory to
+ignored `.light_browseruse/` storage and default optional anonymized telemetry
+and cloud sync to disabled. Respect explicit environment overrides.
+
+## Reason
+Global configuration writes fail in hermetic/restricted environments and do not
+fit LIGHT's local-first default. Browser Use is optional and should not create a
+surprising network/configuration side effect merely because it is imported.
+
+## Consequences
+- **Positive**: Default agent configuration stays inside the ignored workspace
+  and optional service communication is off.
+- **Negative**: Explicit overrides can change this privacy boundary and must be
+  documented by the operator.
+
+## Related Components
+- `config.py`, `browser/agent.py`, `.gitignore`

@@ -1,6 +1,25 @@
 # LIGHT — Troubleshooting & Historical Defect Catalog
 
-> **Knowledge Base**: This document catalogues real technical challenges, edge-case regressions, and historical defects encountered during the development of **LIGHT**, detailing the exact symptoms, root causes, permanent fixes, and corresponding regression tests.
+This catalog preserves diagnosed defects, their causes, fixes, and regression
+evidence. All listed issues are **Resolved in `v0.5.0`** unless a limitation is
+called out. Historical logs and symptoms explain the fix; they are not current
+failure reports or universal performance guarantees.
+
+## Current status index
+
+| Issues | Status at `v0.5.0` | Remaining boundary |
+| --- | --- | --- |
+| 1, 3, 4 | Resolved | parser/model behavior remains input-dependent |
+| 2, 7, 10, 16 | Resolved | external websites and browser policy can still change |
+| 5, 18, 20 | Resolved | OS focus/clipboard/process permissions remain environment-sensitive |
+| 6, 11, 17 | Resolved | agent cancellation is cooperative; bounded joins may time out |
+| 8, 9, 12 | Resolved | stale processes/SQLite/provider availability can still fail loudly |
+| 13, 14 | Resolved in CI | not physical macOS hardware validation |
+| 15, 19 | Resolved | raw-text plan identity and explicit env overrides remain documented constraints |
+
+For installation conflicts, including the current optional `click` metadata
+conflict, see [TESTING.md](TESTING.md). For operational guarantees, use
+[SAFETY.md](SAFETY.md), not historical wording here.
 
 ---
 
@@ -21,15 +40,15 @@ The agent task failed immediately, aborting the command queue without returning 
 ### Fix
 1. Refactored `AutonomousBrowserAgent` to expose a native coroutine method: `async def execute_task(...)`.
 2. Created `run_task_async(...)` for calling directly with `await` within active loops.
-3. Updated the synchronous wrapper `run_task(...)` to inspect `asyncio.get_event_loop()`: if an event loop is already running, it delegates execution to a dedicated background worker thread with its own isolated event loop (`_run_in_new_loop`) rather than using forbidden `nest_asyncio`.
+3. Updated the synchronous wrapper `run_task(...)` to detect a running event loop and delegate execution to a dedicated worker with an isolated loop rather than nesting `asyncio.run()`.
 4. Made `core/loop.py` support native async execution via `execute_next_queued_async()`.
 
 ### Relevant Files
-- [`browser/agent.py`](file:///c:/Projects/LIGHT/browser/agent.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
+- [`browser/agent.py`](../browser/agent.py), [`core/loop.py`](../core/loop.py), [`core/executor.py`](../core/executor.py)
 
 ### Regression Test
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_19_issue1_async_browser_agent_in_running_event_loop`
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_35_run_task_safe_inside_running_loop`
+- `tests/test_new_features.py::TestNewFeatures::test_19_issue1_async_browser_agent_in_running_event_loop`
+- `tests/test_new_features.py::TestNewFeatures::test_35_run_task_safe_inside_running_loop`
 
 ---
 
@@ -60,11 +79,11 @@ Landed on: https://mathworld.com/graph-paper ("Graph Paper for High School Math"
 3. Added post-click semantic verification (`verify_destination`).
 
 ### Relevant Files
-- [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py)
+- [`browser/browser.py`](../browser/browser.py)
 
 ### Regression Test
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_39_named_result_ranking_selects_repository_over_irrelevant`
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_40_wrong_result_detection`
+- `tests/test_new_features.py::TestNewFeatures::test_39_named_result_ranking_selects_repository_over_irrelevant`
+- `tests/test_new_features.py::TestNewFeatures::test_40_wrong_result_detection`
 
 ---
 
@@ -81,7 +100,7 @@ Saying `"Open GitHub, search for LangGraph and open the official repository"` op
 ```
 
 ### Root Cause
-In [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py), `normalize_command_plan()` inspected intermediate commands in a multi-step plan. Any search action that did not explicitly target `"youtube"` defaulted `required_site = "google"`. Because GitHub was active (`active_site == "github"`), the mismatch (`active_site != "google"`) caused the normalizer to inject `OPEN_URL https://google.com`.
+In [`brain/decision.py`](../brain/decision.py), `normalize_command_plan()` inspected intermediate commands in a multi-step plan. Any search action that did not explicitly target `"youtube"` defaulted `required_site = "google"`. Because GitHub was active (`active_site == "github"`), the mismatch (`active_site != "google"`) caused the normalizer to inject `OPEN_URL https://google.com`.
 
 ### Fix
 Updated `normalize_command_plan()` to recognize `github` as a canonical active search engine:
@@ -93,10 +112,10 @@ if active_site == "github" or target.lower().startswith("github:"):
 This preserves GitHub as the active context and formats the search target as `github:<query>` without injecting Google.
 
 ### Relevant Files
-- [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py), [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py)
+- [`brain/decision.py`](../brain/decision.py), [`browser/browser.py`](../browser/browser.py)
 
 ### Regression Test
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_37_open_github_search_langgraph_open_official_repo`
+- `tests/test_new_features.py::TestNewFeatures::test_37_open_github_search_langgraph_open_official_repo`
 
 ---
 
@@ -122,10 +141,10 @@ Added pre-normalization regex in `parse_deterministic_command()`:
 - It is never dispatched as `CLICK_ELEMENT("First Element")`.
 
 ### Relevant Files
-- [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py)
+- [`brain/decision.py`](../brain/decision.py)
 
 ### Regression Test
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_20_click_first_element_voice_variations`
+- `tests/test_new_features.py::TestNewFeatures::test_26_issue4_click_first_element_safe_handling`
 
 ---
 
@@ -146,11 +165,11 @@ Keystrokes leaked into background processes, corrupting code in editor windows.
 3. Added focus-checking guards in `Executor` before `TYPE` actions execute.
 
 ### Relevant Files
-- [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
+- [`computer/screen.py`](../computer/screen.py), [`core/executor.py`](../core/executor.py)
 
 ### Regression Test
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_01_foreground_window_detection`
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_02_focus_aware_typing_success`
+- `tests/test_new_features.py::TestNewFeatures::test_02_type_routes_to_desktop_when_browser_not_foreground`
+- `tests/test_new_features.py::TestNewFeatures::test_03_type_routes_to_browser_when_browser_is_foreground`
 
 ---
 
@@ -176,11 +195,11 @@ Implemented the `BrowserOwnership` state machine (`NONE`, `LIGHT`, `AGENT`):
 - When Browser Use finishes: `[BROWSER] Session returned to LIGHT` (`BrowserOwnership.LIGHT`).
 
 ### Relevant Files
-- [`core/state.py`](file:///c:/Projects/LIGHT/core/state.py), [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
+- [`core/state.py`](../core/state.py), [`core/executor.py`](../core/executor.py)
 
 ### Regression Test
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_42_browser_ownership_transitions`
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_43_normal_desktop_command_while_agent_task_running`
+- `tests/test_new_features.py::TestNewFeatures::test_42_browser_ownership_transitions`
+- `tests/test_new_features.py::TestNewFeatures::test_43_normal_desktop_command_while_agent_task_running`
 
 ---
 
@@ -203,10 +222,10 @@ Rapid headless navigation without automation masking flags triggered Google IP r
 3. When detected, the controller logs a warning and automatically switches the query to DuckDuckGo, preserving workflow continuity without blocking the user.
 
 ### Relevant Files
-- [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py)
+- [`browser/browser.py`](../browser/browser.py)
 
 ### Regression Test
-- `tests/test_browser.py::TestBrowserAndContextFlow::test_google_recaptcha_fallback_to_duckduckgo`
+- `tests/test_browser.py::TestBrowserAndContextFlow::test_search_google_falls_back_to_duckduckgo_when_google_shows_captcha`
 
 ---
 
@@ -224,14 +243,14 @@ OSError: [WinError 10048] Only one usage of each socket address is normally perm
 Windows does not automatically kill child process trees when a parent process terminates abnormally without explicit job object binding.
 
 ### Fix
-Implemented `ensure_single_instance()` in [`main.py`](file:///c:/Projects/LIGHT/main.py):
+Implemented `ensure_single_instance()` in [`main.py`](../main.py):
 1. Reads previous PID from `.light.pid`.
 2. Queries Windows `Win32_Process` via PowerShell for any other `python.exe` running `main.py`.
 3. Terminates stale instances using `taskkill /PID <pid> /T /F` while carefully protecting the current process and its parent launcher shim.
 4. Registers an `atexit` hook to clean up `.light.pid`.
 
 ### Relevant Files
-- [`main.py`](file:///c:/Projects/LIGHT/main.py)
+- [`main.py`](../main.py)
 
 ### Regression Test
 - `tests/test_windows_smoke.py::TestWindowsSmoke`
@@ -254,10 +273,10 @@ SQLite databases in default mode acquire exclusive locks during transactions. At
 ### Fix
 1. In `voice/handy.py`, opened the SQLite connection using URI mode with read-only flag:
    `sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=self.timeout)`.
-2. Wrapped DB read operations in a retry loop with exponential backoff in `core/loop.py`.
+2. Kept the last successful transcription ID unchanged when a read fails; the listener logs the error, waits for the configured poll interval, and retries on the next iteration.
 
 ### Relevant Files
-- [`voice/handy.py`](file:///c:/Projects/LIGHT/voice/handy.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py)
+- [`voice/handy.py`](../voice/handy.py), [`core/loop.py`](../core/loop.py)
 
 ### Regression Test
 - `tests/test_voice.py::TestHandyVoiceAndLoop::test_loop_duplicate_handling_and_error_recovery`
@@ -271,7 +290,7 @@ On systems where Brave was installed in user `%LOCALAPPDATA%`, launching Brave d
 
 ### Symptoms
 ```text
-PermissionError: [WinError 5] Access is denied: 'C:\Users\...\Application\brave.exe'
+PermissionError: [WinError 5] Access is denied: 'C:\Users\<user>\AppData\Local\...\brave.exe'
 ```
 
 ### Root Cause
@@ -284,10 +303,10 @@ Implemented a robust multi-browser fallback chain in `BrowserController.start()`
 3. If Chromium is unavailable, fall back to Google Chrome.
 
 ### Relevant Files
-- [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py), [`config.py`](file:///c:/Projects/LIGHT/config.py)
+- [`browser/browser.py`](../browser/browser.py), [`config.py`](../config.py)
 
 ### Regression Test
-- `tests/test_browser.py::TestBrowserAndContextFlow::test_start_fallback_to_chromium_when_brave_inaccessible`
+- `tests/test_browser.py::TestBrowserAndContextFlow::test_start_falls_back_to_playwright_chromium_on_winerror_5`
 
 ---
 
@@ -307,27 +326,27 @@ When the user initiated an open-ended autonomous research task (`Action.AGENT_TA
 The voice listener continued hearing and enqueueing spoken utterances, but the consumer loop was completely blocked inside synchronous execution of the agent task.
 
 ### Root Cause
-In [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py), `Executor.execute()` handled `Action.AGENT_TASK` by synchronously calling `self.browser_agent.run_task(task_instruction=target, cancel_event=cancel_event)`. Because Browser Use with local Ollama (`qwen3:1.7b`) takes multiple minutes to browse, synthesize, and complete tasks, the single `LightLoop` consumer thread was held hostage for the entire duration of the research run.
+In [`core/executor.py`](../core/executor.py), `Executor.execute()` handled `Action.AGENT_TASK` by synchronously calling `self.browser_agent.run_task(task_instruction=target, cancel_event=cancel_event)`. Because Browser Use with local Ollama (`qwen3:1.7b`) takes multiple minutes to browse, synthesize, and complete tasks, the single `LightLoop` consumer thread was held hostage for the entire duration of the research run.
 
 ### Fix
 1. **Managed Background Worker (`LIGHT-AgentWorker`)**: Offloaded `browser_agent.run_task()` to a dedicated managed daemon thread (`LIGHT-AgentWorker`) inside `Executor.execute()`.
 2. **Immediate Consumer Return**: `Executor.execute()` sets `state.agent_running = True`, transitions `BrowserOwnership.AGENT`, starts the background worker thread, and returns `"OK"` immediately to the caller, allowing `LightLoop` to continue dequeuing and executing normal commands.
 3. **Duplicate Agent Protection**: If a second `AGENT_TASK` is received while a worker is already running, `Executor.execute()` logs a message and returns `"REJECTED"`, preventing duplicate sessions and CPU starvation.
-4. **Lifecycle & Preemption Management**: Added `join_agent()` and `close()` in `Executor` to set `cancel_event` and safely join the worker within bounded timeouts (<300ms on STOP, 500ms on loop exit).
+4. **Lifecycle & Preemption Management**: Added `join_agent()` and `close()` in `Executor` plus bounded join attempts (200ms in the STOP path and 500ms by default during close). A dependency that ignores cancellation may outlive the join window.
 5. **State Restoration**: When `_agent_worker` terminates, it updates `state.agent_running = False` and safely restores `BrowserOwnership` to `LIGHT` (if primary browser is open) or `NONE`.
 
 ### Relevant Files
-- [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py)
+- [`core/executor.py`](../core/executor.py), [`core/loop.py`](../core/loop.py)
 
 ### Regression Test
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_45_agent_task_runs_in_background_without_blocking_executor`
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_46_normal_commands_execute_immediately_while_agent_runs`
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_47_duplicate_agent_task_is_rejected_while_one_is_running`
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_48_stop_preempts_background_agent_worker`
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_49_loop_shutdown_joins_agent_worker`
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_50_agent_worker_failure_resets_state`
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_51_async_loop_executes_normal_command_while_agent_runs`
-- `tests/test_new_features.py::TestNewFeaturesIntegration::test_52_interleaved_desktop_and_browser_commands_during_agent_task`
+- `tests/test_new_features.py::TestNewFeatures::test_45_agent_task_dispatch_is_non_blocking`
+- `tests/test_new_features.py::TestNewFeatures::test_46_normal_command_while_agent_runs`
+- `tests/test_new_features.py::TestNewFeatures::test_47_multiple_normal_commands_execute_in_queue_order_during_agent_task`
+- `tests/test_new_features.py::TestNewFeatures::test_48_stop_preemption_cancels_background_agent_within_bounded_time`
+- `tests/test_new_features.py::TestNewFeatures::test_49_duplicate_agent_task_rejected_while_active`
+- `tests/test_new_features.py::TestNewFeatures::test_50_agent_completion_restores_state_safely`
+- `tests/test_new_features.py::TestNewFeatures::test_51_agent_failure_restores_state_safely`
+- `tests/test_new_features.py::TestNewFeatures::test_52_shutdown_cancels_active_agent_with_bounded_cleanup`
 
 ---
 
@@ -353,7 +372,7 @@ FileNotFoundError: Handy database not found:
 3. Updated `LightLoop` to inspect `voice_provider.is_available()`, logging a clear diagnostic warning and keeping the voice listener idle without throwing errors.
 
 ### Relevant Files
-- [`voice/base.py`](file:///c:/Projects/LIGHT/voice/base.py), [`voice/factory.py`](file:///c:/Projects/LIGHT/voice/factory.py), [`voice/unavailable_provider.py`](file:///c:/Projects/LIGHT/voice/unavailable_provider.py), [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py), [`main.py`](file:///c:/Projects/LIGHT/main.py)
+- [`voice/base.py`](../voice/base.py), [`voice/factory.py`](../voice/factory.py), [`voice/unavailable_provider.py`](../voice/unavailable_provider.py), [`core/loop.py`](../core/loop.py), [`main.py`](../main.py)
 
 ### Regression Test
 - `tests/test_voice_provider.py::TestVoiceProviders::test_factory_returns_unavailable_when_db_missing_without_crashing`
@@ -385,7 +404,7 @@ AssertionError: expected call not found. Expected: Popen(['notepad.exe']) Actual
 3. Configured `strategy.fail-fast: false` in `.github/workflows/tests.yml` so that matrix runners execute to completion independently.
 
 ### Relevant Files
-- [`requirements.txt`](file:///c:/Projects/LIGHT/requirements.txt), [`tests/test_computer.py`](file:///c:/Projects/LIGHT/tests/test_computer.py), [`tests/test_new_features.py`](file:///c:/Projects/LIGHT/tests/test_new_features.py), [`tests/test_voice.py`](file:///c:/Projects/LIGHT/tests/test_voice.py), [`.github/workflows/tests.yml`](file:///c:/Projects/LIGHT/.github/workflows/tests.yml)
+- [`requirements.txt`](../requirements.txt), [`tests/test_computer.py`](../tests/test_computer.py), [`tests/test_new_features.py`](../tests/test_new_features.py), [`tests/test_voice.py`](../tests/test_voice.py), [`.github/workflows/tests.yml`](../.github/workflows/tests.yml)
 
 ### Regression Test
 - `tests/test_computer.py::TestComputerControl::test_open_notepad_and_calculator`
@@ -415,10 +434,10 @@ In `core/executor.py`, after executing `Action.WAIT` and `Action.AGENT_TASK`, ex
 3. On macOS, `screen.get_foreground_window_info()` executes AppleScript via `osascript`, taking 50ms–150ms per process invocation. Running this synchronously inside `WAIT` wakeups and `AGENT_TASK` dispatch severely inflated latency and broke STOP preemption contracts.
 
 ### Fix
-In [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py), updated `Action.AGENT_TASK` and `Action.WAIT` to record the command in `self.state` and return `"OK"` immediately, bypassing redundant post-action observation sync and AppleScript subprocess execution.
+In [`core/executor.py`](../core/executor.py), updated `Action.AGENT_TASK` and `Action.WAIT` to record the command in `self.state` and return `"OK"` immediately, bypassing redundant post-action observation sync and AppleScript subprocess execution.
 
 ### Relevant Files
-- [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
+- [`core/executor.py`](../core/executor.py)
 
 ### Regression Test
 - `tests/test_new_features.py::TestNewFeatures::test_12_stop_preemption_interrupts_wait_under_5ms`

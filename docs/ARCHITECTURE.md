@@ -1,237 +1,157 @@
-# LIGHT — System Architecture Specification
+# LIGHT Architecture
 
-> **Source of Truth**: This document details the technical architecture, runtime data flows, concurrency models, and component boundaries of **LIGHT**. All descriptions correspond directly to the active implementation in the repository.
+This is the canonical runtime architecture for `v0.5.0`. Paths and names refer
+to the tagged source at commit `8524bde`.
 
----
-
-## 1. High-Level Architecture Diagram
-
-```text
-                  PHYSICAL ENVIRONMENT
-                           │ (Spoken Audio)
-                           ▼
-                 Handy Desktop Application
-       (Continuous Local Speech-to-Text & VAD)
-                           │
-                           ▼
-           SQLite Database (%APPDATA%\...\history.db)
-                           │
-═══════════════════════════╪════════════════════════════════════════════
-                           │ LIGHT RUNTIME PROCESS
-                           ▼
-                     voice/handy.py
-            (Handy SQLite Reader & Poller)
-                           │
-                           ▼
-                      core/loop.py
-       (Dedicated Background Listener Thread: 150ms)
-                           │
-                           ▼
-                  core/queue_manager.py
-    (Producer-Consumer Queue with Immediate STOP Preemption)
-                           │
-                           ▼
-                      brain/laya.py
-            (Hybrid Multi-Tier Intent Parser)
-  ┌────────────────────────┼────────────────────────┐
-  ▼                        ▼                        ▼
-Deterministic Fast Path  Local Qwen3 1.7B LLM    Strict Laya Fallback
-(brain/decision.py)      (brain/llm.py @ Ollama) (laya library)
-(<1ms regex/grammars)    (complex goal planning) (prefix-guarded choice)
-  └────────────────────────┬────────────────────────┘
-                           │ Canonical Plan (List[Command])
-                           ▼
-                    core/executor.py
-              (Central Action Dispatcher)
-  ┌────────────────────────┼────────────────────────┐
-  ▼                        ▼                        ▼
-computer/                browser/browser.py       browser/agent.py
-- apps.py (lifecycle)    - Playwright Chromium    - Browser Use
-- screen.py (focus/win)  - DOM candidate ranking  - Autonomous goals
-- keyboard.py (typing)   - Semantic verification  - Subordinate worker
-- mouse.py (precision)   [Ownership: LIGHT]       [Ownership: AGENT]
-  └────────────────────────┬────────────────────────┘
-                           ▼
-               Observation & Verification
-       (Foreground check, DOM bounds, URL/Title semantics)
-```
-
----
-
-## 2. Pipeline Execution Layers
-
-### Layer 1: Speech Ingestion & Voice Providers (`voice/`)
-- **Components**: [`voice/base.py`](file:///c:/Projects/LIGHT/voice/base.py), [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py), [`voice/unavailable_provider.py`](file:///c:/Projects/LIGHT/voice/unavailable_provider.py), [`voice/factory.py`](file:///c:/Projects/LIGHT/voice/factory.py), [`voice/handy.py`](file:///c:/Projects/LIGHT/voice/handy.py)
-- **Role**: Decouples audio and speech-to-text sources behind the `VoiceInputProvider` interface.
-- **Data Flow**:
-  - `get_voice_provider()` dynamically resolves the appropriate provider based on OS and database presence.
-  - On Windows (and macOS with Handy installed), `HandyVoiceProvider` reads SQLite (`history.db`) in read-only URI mode (`file:{path}?mode=ro`) with a strict 1.5s timeout.
-  - If Handy is not detected (e.g. unconfigured macOS hosts), `UnavailableVoiceProvider` informs the core gracefully without crashing or throwing unhandled database errors.
-- **Key Invariants**:
-  - Never writes to or locks the Handy database.
-  - Recovers gracefully from locked database errors (`sqlite3.OperationalError: database is locked`) without crashing the voice loop.
-  - Voice providers remain decoupled from downstream command planning and execution.
-
-### Layer 2: Concurrency & Command Queue (`core/`)
-- **Components**: [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py), [`core/queue_manager.py`](file:///c:/Projects/LIGHT/core/queue_manager.py)
-- **Role**: Decouples audio ingestion from action execution via a thread-safe producer-consumer model.
-- **Data Flow**:
-  - **Producer**: Dedicated background thread `_listener_worker` continuously polls `Handy` every 150ms (`POLL_INTERVAL`), debounces duplicate utterances via `_normalize_for_dedup()`, and ingests spoken text via `LightLoop.ingest_text()`.
-  - **High-Priority Preemption**: `is_explicit_stop_or_cancel()` checks for `"Stop"`, `"Cancel"`, `"Exit"`, or `"Quit"` immediately at ingestion time. If detected, `command_queue.cancel_event.set()` is invoked immediately (<5ms after `ingest_text()` receives the transcription) and a high-priority `STOP` request is queued. Voice-provider polling and STT publication precede this boundary.
-  - **Consumer**: The main loop drains `CommandRequest` items sequentially via `execute_next_queued()` (or `execute_next_queued_async()`).
-  - **Failure Propagation**: If a command fails, `cancel_dependent_after_failure()` automatically purges any subsequent dependent actions in the same compound sequence (e.g. failing `SEARCH` skips subsequent `CLICK_RESULT`).
-
-### Layer 3: Decision Engine & Brain (`brain/`)
-- **Components**: [`brain/laya.py`](file:///c:/Projects/LIGHT/brain/laya.py), [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py), [`brain/llm.py`](file:///c:/Projects/LIGHT/brain/llm.py)
-- **Role**: Translates natural language utterances into an ordered list of typed `Command` objects (`Action`, `target`).
-- **Multi-Tier Resolution Order**:
-  1. **Multi-Step Deterministic Parser** (`parse_multi_command`): Splits clauses on conjunctions (`"and"`, `","`, `"then"`) and parses sequential commands (<1ms).
-  2. **Single-Step Deterministic Parser** (`parse_deterministic_command`): Regex and vocabulary matching for direct actions, keyboard shortcuts, media controls, and navigation (<1ms).
-  3. **Local Qwen3 1.7B LLM Planner** (`QwenPlanner` via Ollama): Invoked for complex, multi-clause natural language search and browsing requests. Output is normalized and strictly validated via `normalize_command_plan()`.
-  4. **Complex Search Fallback** (`parse_complex_fallback`): Rule-based parser handling complex natural search syntax when Ollama is offline or disabled.
-  5. **Laya Intent Classifier** (`Laya.agent.predict`): Machine-learning fallback for ambiguous single-phrase utterances, guarded by strict prefix validation (e.g. casual speech is rejected; single unrelated words are blocked).
-
-### Layer 4: State & Ownership Management (`core/state.py`)
-- **Component**: [`core/state.py`](file:///c:/Projects/LIGHT/core/state.py)
-- **Role**: Tracks active desktop and browser context across multi-utterance interactions.
-- **State Attributes**:
-  - `current_app`: Name of active Windows application (`"notepad"`, `"calculator"`, `"browser"`).
-  - `current_site`: Canonical active website shortcut (`"youtube"`, `"google"`, `"github"`).
-  - `current_url`: Full active URL in the browser.
-  - `last_search_query`: Query text from the most recent search action.
-  - `browser_ownership`: Active browser session owner (`BrowserOwnership.NONE`, `LIGHT`, or `AGENT`).
-  - `recent_history`: Sliding window of recently executed commands.
-- **Planning Isolation**:
-  - `LightState.clone_for_planning()` creates an isolated state clone used during multi-command parsing to track projected intermediate state changes without mutating the live state before execution.
-
-### Layer 5: Execution Engine (`core/executor.py`)
-- **Component**: [`core/executor.py`](file:///c:/Projects/LIGHT/core/executor.py)
-- **Role**: Dispatches parsed commands to appropriate subsystem controllers and manages background agent threads.
-- **Subsystem Routing**:
-  - **Desktop Applications** (`computer/apps.py`): Launch, focus, and close desktop programs.
-  - **Window & Focus** (`computer/screen.py`): Inspect active foreground windows and process names.
-  - **Keyboard & Typing** (`computer/keyboard.py`): Focus-aware typing and system hotkeys.
-  - **Mouse Controls** (`computer/mouse.py`): Relative nudges, DPI-aware coordinates, physical clicks.
-  - **Deterministic Browser** (`browser/browser.py`): Playwright-controlled Chromium session.
-  - **Autonomous Web Agent** (`browser/agent.py`): Subordinate Browser Use task runner.
-- **Background Agent Execution (`LIGHT-AgentWorker`)**:
-  - `Action.AGENT_TASK` commands are dispatched to a dedicated managed daemon thread (`LIGHT-AgentWorker`).
-  - `Executor.execute()` returns `"OK"` immediately, preventing multi-minute research tasks from blocking the primary `LightLoop` consumer thread.
-  - Subsequent desktop and browser commands execute without queuing delays while the agent runs in the background.
-  - If a second `AGENT_TASK` is requested while one is already active, it is rejected with `"REJECTED"`.
-  - When the agent finishes or fails, `LIGHT-AgentWorker` updates `state.agent_running` and restores ownership to `BrowserOwnership.LIGHT` or `NONE`.
-  - On emergency `STOP` or loop termination, `stop_background_agent()` / `close()` sets `cancel_event` and safely joins the worker within a bounded timeout.
-
----
-
-## 3. Browser Ownership Model
-
-To prevent session corruption and event collisions, LIGHT keeps deterministic Playwright and autonomous Browser Use in separate browser sessions and exposes a three-state ownership model. `AGENT` denotes an active autonomous worker and remains authoritative until that worker exits; it does not mean the independent LIGHT Playwright session is destroyed.
+## Runtime map
 
 ```text
-                  ┌──────────────────┐
-                  │       NONE       │
-                  │ (Browser Closed) │
-                  └─────────┬────────┘
-                            │
-               ┌────────────┴────────────┐
-               ▼                         ▼
-      Playwright Action          AGENT_TASK Started
-               │                         │
-               ▼                         ▼
-     ┌──────────────────┐       ┌──────────────────┐
-     │      LIGHT       │       │      AGENT       │
-     │ Playwright Active│       │ Browser Use Runs │
-     └─────────┬────────┘       └─────────┬────────┘
-               │                         │
-               │  [Agent session starts] │
-               ├────────────────────────►│
-               │                         │
-               │  [Agent completes]      │
-               │◄────────────────────────┤
-               │                         │
-               └────────────┬────────────┘
-                            │
-                      STOP / Close
-                            │
-                            ▼
-                  ┌──────────────────┐
-                  │       NONE       │
-                  └──────────────────┘
+external STT/VAD (Handy)
+        |
+        v
+VoiceInputProvider -- read-only transcripts --> LIGHT-VoiceListener thread
+        |                                           |
+        | unavailable provider: idle                v
+        |                                      LightLoop.ingest_text
+        |                                           |
+        |                              explicit STOP sets cancel_event
+        |                                           |
+        +-------------------------------------------v
+                                      CommandQueue (STOP first, normal FIFO)
+                                                   |
+                                                   v
+                                      Laya / decision orchestration
+                          +------------------------+--------------------+
+                          |                        |                    |
+                  deterministic parser      Qwen/Ollama planner   guarded Laya
+                          +------------------------+--------------------+
+                                                   |
+                                        validated List[Command]
+                                                   |
+                                                   v
+                                      LightLoop consumer / Executor
+                          +------------------------+--------------------+
+                          |                        |                    |
+                  desktop controllers       BrowserController    LIGHT-AgentWorker
+                  via PlatformController     Playwright session    Browser Use session
+                          |                        |                    |
+                          +------------------------+--------------------+
+                                                   |
+                                      verification + LightState
 ```
 
-### Ownership Rules
-1. **`BrowserOwnership.LIGHT`**:
-   - Active when LIGHT executes deterministic browser actions (`OPEN_URL`, `SEARCH`, `CLICK_RESULT`, `CLICK_ELEMENT`, `SCROLL`).
-   - Browser operations run via the primary `BrowserController` instance.
-2. **`BrowserOwnership.AGENT`**:
-   - Active exclusively during `AGENT_TASK` execution.
-   - Browser Use creates and manages its own isolated browser session.
-   - The primary Playwright session is never shared with Browser Use. If a deterministic browser command executes concurrently in LIGHT's separate session, ownership remains `AGENT` until the worker exits.
-3. **Desktop & Browser Concurrency**:
-   - While `BrowserOwnership.AGENT` is active on its background thread (`LIGHT-AgentWorker`), normal desktop commands and deterministic actions in LIGHT's isolated Playwright session execute unimpeded without queuing delays. The consumer loop does not wait for the agent to finish.
-4. **Emergency STOP Reset**:
-   - If `"Stop"` or `"Cancel"` is uttered while `AGENT` ownership is active, `executor.browser_agent.cancel()` aborts the agent, `stop_background_agent()` joins the worker within 300ms, and ownership resets immediately to `BrowserOwnership.NONE`.
+## Threads, loops, and sessions
 
----
+| Runtime unit | Owner | Work | Shutdown/cancellation |
+| --- | --- | --- | --- |
+| Main thread | `main.py` / `LightLoop.run()` | sequential queue consumption and ordinary execution | loop STOP/finally closes executor and browser |
+| `LIGHT-VoiceListener` | `core/loop.py` | polls the provider every `POLL_INTERVAL` (default 150ms), debounces, ingests | daemon thread; loop stop flag; joined up to 1s |
+| `LIGHT-AgentWorker` | `core/executor.py` | one synchronous Browser Use task with its own asyncio loop | agent `stop()`, shared event, task cancellation; bounded joins (200ms STOP, configurable close) |
+| Browser Use asyncio loop | `browser/agent.py` | isolated autonomous agent and 10ms cancellation poller | task cancel plus `Browser.close()` in `finally` |
+| Playwright session | `browser/browser.py` | deterministic Chromium context/page | `BrowserController.close()` |
 
-## 4. Search Ranking & Semantic Verification Pipeline
+The agent worker is a daemon thread. Bounded join protects command latency, but
+if a dependency ignores cancellation the thread can outlive the join window.
+That is a known limitation, not a guarantee of immediate process termination.
 
-```text
-User Request: "click official repository" (Context: LangGraph)
-                          │
-                          ▼
-            browser/browser.py::locate_element_in_viewport
-  ┌────────────────────────────────────────────────────────┐
-  │ 1. Collect all visible anchor and clickable elements   │
-  │ 2. Compute Candidate Feature Score:                    │
-  │    + Domain match (e.g. github.com)            : +120  │
-  │    + Exact repo slug match (langchain-ai/...)  : +80   │
-  │    + Target semantic match (repository/docs)   : +50   │
-  │    + Query tokens in text or href              : +30   │
-  │    - Unrelated / social link penalty           : -100  │
-  │ 3. Score Threshold Validation (Min Score >= 20)        │
-  └───────────────────────┬────────────────────────────────┘
-                          │
-         ┌────────────────┴────────────────┐
-         ▼                                 ▼
-   Score < 20                        Score >= 20
-         │                                 │
-         ▼                                 ▼
-  Fail Safely                       Dispatch Physical Click
-(Never blindly click #1)                   │
-                                           ▼
-                            browser/browser.py::verify_destination
-                          ┌────────────────────────────────────────┐
-                          │ 1. Wait for navigation commit/idle     │
-                          │ 2. Verify destination URL and domain   │
-                          │ 3. Check page title and visible text   │
-                          │ 4. Require query tokens in destination │
-                          └──────────────────┬─────────────────────┘
-                                             │
-                            ┌────────────────┴────────────────┐
-                            ▼                                 ▼
-                     Verification Match               Mismatch Detected
-                            │                                 │
-                            ▼                                 ▼
-                     Report [EXECUTOR] OK              Raise RuntimeError
-                                                    (Refuse false success)
-```
+## Voice and queue flow
 
----
+`get_voice_provider()` returns `HandyVoiceProvider` when the configured database
+exists, otherwise `UnavailableVoiceProvider`. Handy queries are read-only and
+ordered by monotonically increasing IDs. Provider read errors are handled by
+the listener without moving the last successful ID.
 
-## 5. Component Breakdown & Boundaries
+`LightLoop.ingest_text()` performs explicit STOP detection before brain
+planning. STOP sets `CommandQueue.cancel_event`, clears queued normal work, and
+is inserted at the front. Normal requests remain FIFO. A failed `OPEN_URL` or
+`SEARCH` prunes only dependent requests carrying the same utterance text; it
+does not cancel another plan's work.
 
-| Component | File Path | Inbound Dependencies | Outbound Dependencies | Key Invariants | AI Agent Cautions |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Voice Provider** | [`voice/base.py`](file:///c:/Projects/LIGHT/voice/base.py), [`voice/handy_provider.py`](file:///c:/Projects/LIGHT/voice/handy_provider.py) | `core/loop.py` | `sqlite3`, `config.py` | Read-only SQLite mode; monotonic ID ordering; graceful fallback. | Do not assume Handy exists on macOS; handle unavailable provider gracefully. |
-| **Command Queue** | [`core/queue_manager.py`](file:///c:/Projects/LIGHT/core/queue_manager.py) | `core/loop.py` | `threading`, `time` | STOP signaling <5ms after ingestion; priority ordering; thread-safe. | Never remove `cancel_event` or bypass queue locks. |
-| **Voice Loop** | [`core/loop.py`](file:///c:/Projects/LIGHT/core/loop.py) | `main.py` | `voice/factory.py`, `core/queue_manager.py`, `core/executor.py` | Listener thread decoupled from consumer execution. | Never execute blocking actions inside `_listener_worker`. |
-| **Decision Engine** | [`brain/decision.py`](file:///c:/Projects/LIGHT/brain/decision.py) | `brain/laya.py` | `brain/commands.py`, `config.py` | Multi-step fast path <1ms; strictly typed `Command` output. | Do not add network calls or slow operations to deterministic parsing. |
-| **LLM Planner** | [`brain/llm.py`](file:///c:/Projects/LIGHT/brain/llm.py) | `brain/laya.py` | `urllib`, `config.py` | Local Ollama only; timeout-guarded; plan normalized. | Never add cloud API keys; sanitize `/no_think` tokens. |
-| **Browser Controller**| [`browser/browser.py`](file:///c:/Projects/LIGHT/browser/browser.py) | `core/executor.py` | `playwright`, `config.py` | Single active session; DPI screen conversion; semantic verification. | Never fall back to blind result #1 clicking on named targets. |
-| **Browser Agent** | [`browser/agent.py`](file:///c:/Projects/LIGHT/browser/agent.py) | `core/executor.py` | `browser_use`, `ollama` | Async-safe (`execute_task`); immediate STOP preemption. | Do not call `asyncio.run()` within an existing event loop. |
-| **Platform Controller**| [`computer/platform_factory.py`](file:///c:/Projects/LIGHT/computer/platform_factory.py) | `computer/*`, `main.py` | `platform_windows.py`, `platform_macos.py` | OS isolation behind abstract interface; zero cross-platform regressions. | Only OS-specific operations belong in concrete platform implementations. |
-| **App Controller** | [`computer/apps.py`](file:///c:/Projects/LIGHT/computer/apps.py) | `core/executor.py` | `computer/platform_factory.py`, `subprocess`, `psutil` | Clean process tracking; no destructive force kill on shared browsers. | Protect system processes and launcher PID trees across OS targets. |
-| **Screen Controller**| [`computer/screen.py`](file:///c:/Projects/LIGHT/computer/screen.py) | `core/executor.py` | `computer/platform_factory.py`, `pyautogui` | High-DPI/Retina awareness; foreground window verification. | Always verify foreground before typing text. |
-| **State Tracker** | [`core/state.py`](file:///c:/Projects/LIGHT/core/state.py) | All subsystems | `brain/commands.py` | Thread-safe locks; explicit ownership transitions. | Use `clone_for_planning()` during multi-command planning. |
+The sub-5ms measurement begins when `ingest_text()` receives a transcript. It
+does not cover speech recognition, Handy publication, or the polling interval.
+
+## Decision order and trust boundaries
+
+`Laya.understand_many()` resolves input in this order:
+
+1. deterministic multi-command parser;
+2. deterministic single-command parser;
+3. optional local Qwen planner;
+4. deterministic complex-search fallback;
+5. guarded Laya classification.
+
+The Qwen planner uses HTTP only to the configured Ollama endpoint (localhost by
+default), accepts JSON, and validates actions against the `Action` enum.
+Applications are allowlisted, URLs are normalized/validated, STOP requires an
+explicit user phrase, and no shell action exists. This reduces—but does not
+eliminate—the risk of harmful text targets or browser content. Executor and
+browser safety checks remain authoritative.
+
+## Executor and state
+
+`Executor` owns controllers and performs action routing. Most commands verify
+their result and then call `LightState.record_command()` plus observation sync.
+`WAIT` and `AGENT_TASK` skip synchronous observation to avoid unnecessary
+AppleScript/process latency. STOP cancels the agent, attempts a bounded join,
+closes the deterministic browser, and records state cleanup.
+
+`LightState` protects mutations with an `RLock`, stores current app/browser,
+URL/site/title, recent command history, search context, pending goal, mouse
+position, and agent status, and creates `clone_for_planning()` snapshots so a
+plan cannot mutate live state before execution.
+
+## Browser sessions and ownership
+
+`BrowserOwnership` is a state signal with values `NONE`, `LIGHT`, and `AGENT`:
+
+- `LIGHT`: the deterministic Playwright session is the relevant owner;
+- `AGENT`: an isolated Browser Use worker is active; deterministic commands may
+  still use their separate Playwright session, but may not erase this signal;
+- `NONE`: no relevant session is active or STOP has cleared state.
+
+The enum is not a mutex and does not serialize the two independent browsers.
+Atomic agent admission under `_agent_lock` prevents two agent workers. The
+Playwright controller has its own page/context lifecycle and recovery.
+
+Named result handling collects visible anchors, scores query/domain/semantic
+signals, physically clicks the selected point, requires a changed active URL,
+and verifies URL/title/body semantics. Numeric “first result” requests are
+explicit ordinal actions and do not use the named-target confidence promise.
+
+## Platform boundary
+
+High-level desktop controllers depend on `PlatformController`. Windows uses
+Win32/ctypes, PowerShell, and `taskkill`; macOS uses AppleScript, `open`, POSIX
+process commands, and modifier/scale mappings. `main.py` performs generic
+subprocess execution using commands supplied by the platform controller for
+single-instance enforcement.
+
+Linux is not supported. The factory's fallback is compatibility behavior, not
+a Linux platform implementation.
+
+## Configuration and external dependencies
+
+- Handy is an external local STT/VAD application and SQLite producer.
+- Ollama is optional for Qwen planning and required for Browser Use tasks.
+- Playwright Chromium is required for deterministic browser automation.
+- Browser Use is optional and lazily imported.
+- Laya is loaded for the final classifier path.
+- PyAutoGUI/Pyperclip drive physical input and clipboard behavior.
+
+Configuration is read from environment variables and optional untracked
+`.env`. Browser Use configuration defaults to `.light_browseruse/`, with its
+optional telemetry and cloud sync disabled unless a user explicitly overrides
+them.
+
+## Architectural limits
+
+- cancellation coverage is not uniform across every blocking Playwright or OS
+  operation;
+- browser state is a best-effort observation and can become stale between an OS
+  focus change and dispatch;
+- coordinate conversion has single-display/high-DPI coverage, not heterogeneous
+  mixed-DPI multi-monitor evidence;
+- Browser Use output is reported asynchronously through logs/state fields, not
+  a dedicated user notification channel;
+- provider polling is filesystem/database based; there is no direct audio
+  pipeline in LIGHT.

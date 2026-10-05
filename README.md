@@ -1,188 +1,136 @@
-# LIGHT — Voice-Controlled Desktop & Browser Automation Assistant
+# LIGHT — Local Voice-Controlled Desktop and Browser Automation
 
 [![LIGHT CI](https://github.com/Vaibhavraghav108/LIGHT/actions/workflows/tests.yml/badge.svg)](https://github.com/Vaibhavraghav108/LIGHT/actions/workflows/tests.yml)
-[![Tests: 147 Passed](https://img.shields.io/badge/Tests-147%20passed-brightgreen.svg)](docs/TESTING.md)
-[![Platform: Windows & macOS](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-blue.svg)](docs/PRODUCT_SPEC.md)
-[![Architecture: Local--First](https://img.shields.io/badge/Architecture-Local--First-orange.svg)](docs/ARCHITECTURE.md)
+[![Tag: v0.5.0](https://img.shields.io/badge/tag-v0.5.0-blue.svg)](https://github.com/Vaibhavraghav108/LIGHT/tree/v0.5.0)
 
-**LIGHT** is a local-first, low-latency, voice-controlled desktop and browser automation assistant supporting **Windows** and **macOS**. It ingests speech-to-text transcriptions through an extensible `VoiceInputProvider` architecture (Handy SQLite on Windows/macOS with graceful fallback), parses commands through a multi-tier hybrid brain (deterministic fast path in <1ms, local Qwen3 1.7B planning via Ollama, and strict prefix-guarded Laya classification), and executes verified actions across operating system applications, physical mouse/keyboard controls, deterministic Playwright browser automation, and an isolated Browser Use autonomous agent.
+LIGHT is a local-first assistant that turns continuous speech transcriptions
+into desktop and browser actions. Frequent commands take a deterministic path;
+complex requests can use local Qwen3 1.7B through Ollama; open-ended web goals
+can use an isolated Browser Use agent. No cloud LLM or subscription API key is
+required.
 
 ```text
-[VoiceInputProvider] ──► [Thread-Safe CommandQueue] ──► [Hybrid Brain (<1ms Fast Path + Qwen3 1.7B)]
- (Handy / Fallback)                                                    │
-                      ┌────────────────────────────────────────────────┴────────────────────────────┐
-                      ▼                                                                             ▼
-          [PlatformController]                                                            [Browser Controllers]
-   ├── Windows: Win32, ctypes, PowerShell                                      ├── Playwright Chromium (LIGHT)
-   └── macOS: AppleScript, open, POSIX                                         │   └── Result Ranking & Verification
-                                                                               └── Browser Use Agent (AGENT)
+Handy/local transcript -> listener -> priority queue -> deterministic brain
+                                      |              -> local Ollama planner
+                                      v
+                                  executor -> desktop / Playwright / agent
+                                           -> verification -> state
 ```
 
----
+## What is in `v0.5.0`
 
-## Platform Support Matrix
+- continuous, read-only Handy SQLite transcript ingestion with an unavailable
+  provider fallback;
+- deterministic commands, compound plans, guarded Laya fallback, and optional
+  local Ollama planning;
+- application, keyboard, mouse, window, media, and screen controls through a
+  Windows/macOS platform boundary;
+- deterministic Playwright navigation, visible-element selection, named-result
+  ranking, physical click handling, and destination verification;
+- isolated Browser Use research tasks on `LIGHT-AgentWorker`;
+- ingestion-time STOP priority, plan-scoped cancellation, browser ownership,
+  focus checks, verified clipboard writes, and scoped process shutdown.
 
-| Subsystem | Windows (10/11) | macOS (Sonoma/Sequoia) | Status Notes |
-| :--- | :--- | :--- | :--- |
-| **Hybrid Brain & LLM Planner** | **SUPPORTED** | **SUPPORTED** | Pure Python parsing + local Ollama HTTP REST API. |
-| **Playwright Browser Automation** | **SUPPORTED** | **SUPPORTED** | Chromium runs identically on Windows and macOS. |
-| **Autonomous Agent (Browser Use)** | **SUPPORTED** | **SUPPORTED** | Isolated session on `LIGHT-AgentWorker` background thread. |
-| **Desktop Application Lifecycle** | **SUPPORTED** | **SUPPORTED** | Windows `.exe` / `taskkill` vs macOS `open -a` / AppleScript. |
-| **Screen & Window Observation** | **SUPPORTED** | **SUPPORTED** | Win32 DPI & APIs vs macOS AppleScript & Quartz. |
-| **Mouse & Keyboard Control** | **SUPPORTED** | **SUPPORTED** | PyAutoGUI with platform modifier mapping (`ctrl` $\to$ `cmd`). |
-| **Voice Input Provider** | **SUPPORTED** | **PARTIALLY SUPPORTED** | Native Handy SQLite on Windows. On macOS, Handy is third-party dependent; if missing, reports unavailable provider without crashing. |
+Browser automation necessarily connects to requested websites. “Local-first”
+means speech ingestion, decision logic, and model inference stay local by
+default; it does not mean web requests are offline.
 
----
+## Platform status
 
-## Setup & Installation
+| Area | Windows | macOS |
+| --- | --- | --- |
+| Parser, queue, state, local Ollama | Automated tests and CI | Automated tests and CI |
+| Deterministic browser | CI plus local Playwright integration | CI plus local Playwright integration |
+| Desktop platform layer | Unit tests; opt-in host smoke available | Mocked unit tests; opt-in host smoke available |
+| Handy voice ingestion | Implemented; requires local Handy database | Path/fallback implemented; Handy and physical voice flow not verified |
+| Physical hardware/permissions | Some opt-in Windows smoke evidence | Not recorded for a physical Mac |
 
-### Windows Prerequisites
-1. **Windows 10 / 11** (64-bit).
-2. **Python 3.10+** (verified on Python 3.12).
-3. **Handy Desktop App**: For continuous local voice dictation writing to `%APPDATA%\com.pais.handy\history.db`.
-4. **Ollama**: Running locally with `qwen3:1.7b`:
-   ```powershell
-   ollama run qwen3:1.7b
-   ```
+CI passing on `macos-latest` is not evidence that Accessibility, Screen
+Recording, a microphone, Handy, Retina, or multi-monitor behavior works on a
+specific Mac.
 
-### macOS Prerequisites
-1. **macOS 13+** (Ventura, Sonoma, or Sequoia on Apple Silicon or Intel).
-2. **Python 3.10+** (verified on Python 3.12).
-3. **Permissions**: Grant your terminal / IDE permissions under *System Settings > Privacy & Security*:
-   - **Accessibility**: Required for synthetic keyboard shortcuts and cursor movement.
-   - **Screen Recording**: Required for screen capture and element observation.
-4. **Ollama**: Running locally with `qwen3:1.7b`:
-   ```bash
-   ollama run qwen3:1.7b
-   ```
-5. **Voice Input**: If Handy desktop is installed, LIGHT reads from `~/Library/Application Support/com.pais.handy/history.db`. If Handy is not present, LIGHT gracefully operates with voice listening idle.
-6. **macOS PyObjC Frameworks**: `requirements.txt` specifies `pyobjc-core`, `pyobjc-framework-Quartz`, and `pyobjc-framework-Cocoa` using `sys_platform == 'darwin'` markers for PyAutoGUI automation.
+## Install
 
-### 1. Environment Setup & Dependencies
-From PowerShell in the project root:
+Requirements: Python 3.10+ (CI uses 3.12), a supported Chromium browser, and
+optionally Handy for voice and Ollama for local planning/agent work.
+
+Windows PowerShell:
 
 ```powershell
 python -m venv lightenv
-.\lightenv\Scripts\pip.exe install --upgrade pip
-.\lightenv\Scripts\pip.exe install -r requirements.txt
-.\lightenv\Scripts\pip.exe install browser-use==0.13.10 ollama==0.6.1
+.\lightenv\Scripts\python.exe -m pip install --upgrade pip
+.\lightenv\Scripts\python.exe -m pip install -r requirements.txt
+.\lightenv\Scripts\python.exe -m pip install browser-use==0.13.10 ollama==0.6.1
+.\lightenv\Scripts\python.exe -m playwright install chromium
 ```
 
-LIGHT defaults Browser Use to a repository-local `.light_browseruse/` configuration directory and disables its optional anonymized telemetry and cloud sync. Explicit environment overrides remain available for developers who intentionally opt in.
+macOS:
 
-### 2. Install Playwright Chromium Browser
-```powershell
-$env:PLAYWRIGHT_BROWSERS_PATH="c:\Projects\LIGHT\.playwright-browsers"
-.\lightenv\Scripts\playwright.exe install chromium
+```bash
+python3 -m venv lightenv
+./lightenv/bin/python -m pip install --upgrade pip
+./lightenv/bin/python -m pip install -r requirements.txt
+./lightenv/bin/python -m pip install browser-use==0.13.10 ollama==0.6.1
+./lightenv/bin/python -m playwright install chromium
 ```
 
-### 3. Run LIGHT
+The optional agent installation currently produces a dependency metadata
+conflict: `browser-use==0.13.10` requires `click==8.3.3`, while the installed
+`huggingface-hub` dependency used by Laya requires `click>=8.4.2,<9`. The tested
+CI environment installs successfully, but `pip check` is not clean. Do not
+silently resolve this by upgrading packages without compatibility testing.
+
+### Local configuration
+
+Create an untracked `.env` only when overriding defaults. Supported settings
+include `HANDY_DB_PATH`, `LAYA_MODEL`, `LLM_ENABLED`, `LLM_PROVIDER`,
+`LLM_MODEL`, `LLM_BASE_URL`, `LLM_TIMEOUT`, `POLL_INTERVAL`,
+`DUPLICATE_COOLDOWN_SECONDS`, `BROWSER_TIMEOUT_MS`,
+`BROWSER_TYPE_GUARD_MS`, `LIGHT_CDP_PORT`, and
+`PLAYWRIGHT_BROWSERS_PATH`. Browser Use defaults to repository-local
+`.light_browseruse/` storage with optional telemetry and cloud sync disabled.
+
+Start Ollama when LLM planning or agent work is desired:
+
+```text
+ollama run qwen3:1.7b
+```
+
+## Run
+
 ```powershell
 .\lightenv\Scripts\python.exe main.py
 ```
-Say **"Stop"**, **"Stop light"**, **"Exit"**, or **"Quit"** (or press `Ctrl+C`) to cleanly exit.
 
----
+On macOS use `./lightenv/bin/python main.py` and grant the terminal/IDE the
+Accessibility and Screen Recording permissions needed by the actions you use.
+If no voice provider is available, LIGHT remains running with voice ingestion
+idle instead of crashing.
 
-## Running Tests
+STOP phrases are checked as soon as a transcript reaches `ingest_text()`.
+Cancellation signaling is measured at that boundary; Handy's 150ms polling
+interval and STT publication precede it, and some third-party calls are only
+cooperatively cancellable.
 
-See [`docs/TESTING.md`](docs/TESTING.md) for full testing documentation.
+## Test
 
-### Full Discovery Test Suite (155 Tests)
 ```powershell
 .\lightenv\Scripts\python.exe -m unittest discover -s tests -v
-```
-**Baseline Result**: `Ran 155 tests in ~28s` $\to$ `OK (skipped=8)` (147 executed and passed; 8 opt-in host smoke checks skipped by default).
-
-### Static Compilation Syntax Check
-```powershell
 .\lightenv\Scripts\python.exe -m compileall -q main.py config.py voice brain computer browser core utils tests
 ```
 
-### Opt-In Windows Host Smoke Tests
-```powershell
-$env:LIGHT_RUN_WINDOWS_SMOKE="1"; .\lightenv\Scripts\python.exe -m unittest tests/test_windows_smoke.py -v
-```
+The tagged `v0.5.0` CI baseline discovers 155 tests: 147 pass and 8 opt-in host
+smoke tests skip on both Windows and macOS jobs. Results and local-environment
+limitations are documented in [docs/TESTING.md](docs/TESTING.md).
 
-### Opt-In macOS Host Smoke Tests
-```bash
-LIGHT_RUN_MACOS_SMOKE=1 python -m unittest tests/test_macos_smoke.py -v
-```
+## Documentation
 
----
+Start with the [documentation map](docs/README.md). The key references are the
+[product specification](docs/PRODUCT_SPEC.md),
+[architecture](docs/ARCHITECTURE.md), [feature evidence](docs/FEATURES.md),
+[safety contract](docs/SAFETY.md), and [engineering contract](AGENTS.md).
 
-## Repository Structure
-
-```text
-LIGHT/
-├── AGENTS.md                    # Core operating contract for AI coding assistants
-├── README.md                    # Developer-facing project overview
-├── config.py                    # Central configuration and cross-platform paths
-├── main.py                      # Single-instance application entry point
-├── requirements.txt             # Primary Python dependencies with platform markers
-│
-├── brain/                       # Hybrid Decision Engine
-│   ├── commands.py              # Action enum, Command dataclasses
-│   ├── decision.py              # Deterministic multi-step & single-step parsers
-│   ├── decisions.py             # Backward-compatible re-exports
-│   ├── laya.py                  # Multi-tier orchestrator & Laya classifier
-│   └── llm.py                   # Local Qwen3 1.7B planner via Ollama
-│
-├── browser/                     # Browser Automation
-│   ├── agent.py                 # Subordinate Browser Use autonomous agent
-│   └── browser.py               # Deterministic Playwright Chromium controller
-│
-├── computer/                    # Desktop & Hardware Subsystem
-│   ├── apps.py                  # Application lifecycle (Notepad/TextEdit, Calc, etc.)
-│   ├── keyboard.py              # Keystrokes, typing, hotkey mappings
-│   ├── mouse.py                 # Precision cursor homing & physical clicking
-│   ├── screen.py                # Window focus observation & window controls
-│   ├── platform_base.py         # Abstract PlatformController base class
-│   ├── platform_windows.py      # Windows Win32, ctypes, and PowerShell implementation
-│   ├── platform_macos.py        # macOS AppleScript, open, and POSIX implementation
-│   └── platform_factory.py      # OS detection and platform controller factory
-│
-├── core/                        # Concurrency & Execution Core
-│   ├── executor.py              # Action dispatcher, ownership routing & background agent worker
-│   ├── loop.py                  # Dedicated background listener & consumer loop
-│   ├── queue_manager.py         # Thread-safe CommandQueue with STOP preemption
-│   └── state.py                 # LightState & BrowserOwnership lifecycle
-│
-├── docs/                        # Complete Engineering Memory System
-│   ├── ARCHITECTURE.md          # Technical architecture & component specs
-│   ├── CHANGELOG.md             # Categorized milestone evolution history
-│   ├── DECISIONS.md             # Architecture Decision Records (ADRs)
-│   ├── FEATURES.md              # Complete subsystem feature inventory
-│   ├── PRODUCT_SPEC.md          # Requirements, UX, and operational boundaries
-│   ├── ROADMAP.md               # Milestones, active hardening & future plans
-│   ├── SAFETY.md                # Safety invariants, preemption, verification
-│   ├── TESTING.md               # Test suite guide & critical workflows
-│   └── TROUBLESHOOTING.md       # Historical defects, root causes & fixes
-│
-├── logs/                        # Runtime execution logs (tracked via .gitkeep)
-│   └── .gitkeep
-│
-├── tests/                       # Multi-Tier Automated Test Suite
-│   ├── test_browser.py          # Browser navigation & reCAPTCHA tests
-│   ├── test_computer.py         # Desktop app, keyboard, and mouse tests
-│   ├── test_integration_local_browser.py # Real headless Playwright DOM tests
-│   ├── test_laya.py             # Deterministic parser & safety guards
-│   ├── test_macos_smoke.py      # Opt-in host macOS smoke tests
-│   ├── test_new_features.py     # Reliability, ranking, verification, agent
-│   ├── test_platform_macos.py   # Unit tests for macOS platform controller
-│   ├── test_queue_and_llm.py    # Producer-consumer queue & Qwen planner
-│   ├── test_voice.py            # SQLite reader & voice debouncing tests
-│   ├── test_voice_provider.py   # VoiceInputProvider abstraction tests
-│   └── test_windows_smoke.py    # Opt-in host Windows smoke tests
-│
-├── utils/                       # Shared Utilities
-│   └── logger.py                # Standardized prefix logger ([LIGHT], [PERF], etc.)
-│
-└── voice/                       # Speech Ingestion & Providers
-    ├── base.py                  # Abstract VoiceInputProvider interface
-    ├── handy_provider.py        # SQLite reader for Handy history.db
-    ├── unavailable_provider.py  # Graceful fallback when no voice provider is configured
-    ├── factory.py               # Voice provider factory with platform awareness
-    ├── handy.py                 # Backward-compatible wrapper for Handy
-    └── handy_voice.py           # Compatibility alias
-```
+Current known limits include physical macOS validation, mixed-DPI
+multi-monitor validation, partial cancellation inside third-party calls, the
+optional dependency conflict above, fixed app allowlists, and single-page
+candidate ranking. See [ROADMAP](docs/ROADMAP.md) for planned work.
