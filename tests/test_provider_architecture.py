@@ -32,10 +32,53 @@ from voice.custom_api_provider import CustomAPITranscriptProvider
 from voice.factory import get_voice_provider
 from voice.handy_provider import HandyVoiceProvider
 from browser.agent import AutonomousBrowserAgent
+from core.executor import Executor
 from providers.cli import main as provider_cli_main
+from tests.provider_test_utils import make_test_ai_provider, make_test_laya, make_test_planner
 
 
 class TestProviderConfiguration(unittest.TestCase):
+    def test_explicit_test_dependencies_ignore_persisted_provider_changes(self):
+        persisted_configs = (
+            {
+                "ai": {
+                    "provider": "local",
+                    "runtime": "ollama",
+                    "model": "qwen2.5:1.5b",
+                    "base_url": "http://127.0.0.1:11434",
+                }
+            },
+            {
+                "ai": {
+                    "provider": "openai",
+                    "runtime": "",
+                    "model": "gpt-test",
+                    "base_url": "https://api.openai.com/v1",
+                }
+            },
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "providers.json"
+            for persisted_config in persisted_configs:
+                config_path.write_text(json.dumps(persisted_config), encoding="utf-8")
+                with patch.dict(
+                    "os.environ",
+                    {"LIGHT_PROVIDER_CONFIG": str(config_path)},
+                    clear=False,
+                ):
+                    provider = make_test_ai_provider()
+                    planner = make_test_planner()
+                    executor = Executor(ai_provider=make_test_ai_provider())
+                    agent = AutonomousBrowserAgent(ai_provider=make_test_ai_provider())
+                    laya = make_test_laya(MagicMock())
+
+                self.assertEqual((provider.runtime_name, provider.model), ("ollama", "qwen3:1.7b"))
+                self.assertEqual((planner.runtime, planner.model), ("ollama", "qwen3:1.7b"))
+                self.assertEqual(executor.browser_agent.ai_provider.model, "qwen3:1.7b")
+                self.assertEqual(agent.ai_provider.model, "qwen3:1.7b")
+                self.assertEqual(laya.llm.model, "qwen3:1.7b")
+
     def test_user_facing_provider_choices_are_explicit_and_bounded(self):
         self.assertEqual(STT_PROVIDER_CHOICES, ("local", "custom_api"))
         self.assertEqual(

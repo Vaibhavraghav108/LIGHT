@@ -2,11 +2,11 @@ import unittest
 from unittest.mock import MagicMock
 
 from brain.commands import Action, Command
-from brain.laya import Laya
 from browser.browser import BrowserController
 from core.executor import Executor
 from core.loop import LightLoop
 from core.state import LightState
+from tests.provider_test_utils import make_test_ai_provider, make_test_laya
 
 
 class TestBrowserAndContextFlow(unittest.TestCase):
@@ -99,9 +99,9 @@ class TestBrowserAndContextFlow(unittest.TestCase):
         mock_agent.predict.return_value = {
             "answers": {"action": {"choice": "STOP"}}
         }
-        laya = Laya(agent=mock_agent)
+        laya = make_test_laya(mock_agent)
 
-        executor = Executor(state=state)
+        executor = Executor(state=state, ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         executor.browser.is_active.return_value = True
         executor.browser.get_current_url.return_value = "https://youtube.com"

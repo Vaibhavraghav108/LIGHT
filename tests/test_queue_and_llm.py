@@ -16,6 +16,7 @@ from core.executor import Executor
 from core.loop import LightLoop
 from core.queue_manager import CommandPriority, CommandQueue, CommandRequest, CommandStatus
 from core.state import LightState
+from tests.provider_test_utils import make_test_ai_provider, make_test_laya, make_test_planner
 from voice.handy import Handy
 
 
@@ -43,9 +44,28 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
             "CREATE TABLE transcription_history (id INTEGER PRIMARY KEY AUTOINCREMENT, transcription_text TEXT)"
         )
         conn.commit()
+        conn.close()
 
-        handy = Handy(db_path=db_path)
-        laya = Laya(agent=self.mock_agent)
+        initial_snapshot_complete = threading.Event()
+        open_started = threading.Event()
+        search_observed = threading.Event()
+        release_open = threading.Event()
+        search_finished = threading.Event()
+
+        class SignallingHandy(Handy):
+            def get_latest_transcription(self):
+                result = super().get_latest_transcription()
+                initial_snapshot_complete.set()
+                return result
+
+            def get_transcriptions_since(self, last_id):
+                items = super().get_transcriptions_since(last_id)
+                if any(item.get("text") == "Search Python tutorials" for item in items):
+                    search_observed.set()
+                return items
+
+        handy = SignallingHandy(db_path=db_path)
+        laya = make_test_laya(self.mock_agent)
         executor = MagicMock()
         executor.state = self.state
 
@@ -54,9 +74,15 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
         def slow_execute(cmd: Command, raw_text=None, cancel_event=None):
             events.append(f"EXEC_START:{cmd.action.value}:{cmd.target}")
             if cmd.action == Action.OPEN_URL:
-                time.sleep(0.22)
+                open_started.set()
+                if not search_observed.wait(timeout=2.0):
+                    raise AssertionError("Listener did not ingest search while OPEN_URL was executing")
+                if not release_open.wait(timeout=2.0):
+                    raise AssertionError("Test did not release OPEN_URL execution")
             events.append(f"EXEC_END:{cmd.action.value}:{cmd.target}")
             self.state.record_command(raw_text, cmd)
+            if cmd.action == Action.SEARCH:
+                search_finished.set()
             return "STOP" if cmd.action == Action.STOP else "OK"
 
         executor.execute.side_effect = slow_execute
@@ -70,34 +96,49 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
             poll_interval=0.015,
         )
 
-        def producer_writer():
-            time.sleep(0.08)
-            c = sqlite3.connect(db_path)
-            c.execute(
-                "INSERT INTO transcription_history (transcription_text) VALUES (?)",
-                ("Open YouTube",),
-            )
-            c.commit()
-            time.sleep(0.04)  # While Open YouTube is still sleeping (220ms)!
-            c.execute(
-                "INSERT INTO transcription_history (transcription_text) VALUES (?)",
-                ("Search Python tutorials",),
-            )
-            c.commit()
-            time.sleep(0.35)  # Let both execute before sending Stop
-            c.execute(
-                "INSERT INTO transcription_history (transcription_text) VALUES (?)",
-                ("Stop",),
-            )
-            c.commit()
-            c.close()
+        def insert_transcript(text: str):
+            writer_connection = sqlite3.connect(db_path)
+            try:
+                writer_connection.execute(
+                    "INSERT INTO transcription_history (transcription_text) VALUES (?)",
+                    (text,),
+                )
+                writer_connection.commit()
+            finally:
+                writer_connection.close()
 
-        writer = threading.Thread(target=producer_writer, daemon=True)
-        writer.start()
-        loop.run(max_iterations=60)
-        writer.join()
-        conn.close()
-        temp_dir.cleanup()
+        runner = threading.Thread(target=loop.run, name="LIGHT-TestRunner", daemon=True)
+        runner.start()
+        try:
+            self.assertTrue(
+                initial_snapshot_complete.wait(timeout=2.0),
+                "Listener did not complete its initial transcript snapshot",
+            )
+            insert_transcript("Open YouTube")
+            self.assertTrue(open_started.wait(timeout=2.0), "OPEN_URL did not begin execution")
+
+            insert_transcript("Search Python tutorials")
+            self.assertTrue(
+                search_observed.wait(timeout=2.0),
+                "Listener did not capture search while OPEN_URL was executing",
+            )
+            self.assertEqual(events, ["EXEC_START:open_url:https://youtube.com"])
+            release_open.set()
+
+            self.assertTrue(search_finished.wait(timeout=2.0), "SEARCH did not finish execution")
+            insert_transcript("Stop")
+            runner.join(timeout=2.0)
+            self.assertFalse(runner.is_alive(), "LightLoop did not stop after STOP transcription")
+            self.assertTrue(
+                loop._listener_done.wait(timeout=2.0),
+                "Listener thread did not release its transcription database handle",
+            )
+        finally:
+            release_open.set()
+            loop._stop_requested.set()
+            runner.join(timeout=1.0)
+            loop._listener_done.wait(timeout=1.0)
+            temp_dir.cleanup()
 
         self.assertEqual(
             events,
@@ -118,7 +159,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
         'Open Google', 'Search Python', 'Click first result', 'Scroll down',
         'Scroll down', 'Press Enter', 'Go back', 'Refresh'
         """
-        laya = Laya(agent=self.mock_agent)
+        laya = make_test_laya(self.mock_agent)
         executor = MagicMock()
         executor.state = self.state
 
@@ -186,11 +227,11 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
         3. 'Stop' executes immediately.
         """
         state = LightState()
-        executor = Executor(state=state)
+        executor = Executor(state=state, ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         executor.browser.is_active.return_value = True
         executor.browser.get_current_url.return_value = "https://youtube.com"
-        laya = Laya(agent=self.mock_agent)
+        laya = make_test_laya(self.mock_agent)
 
         loop = LightLoop(handy=MagicMock(), laya=laya, executor=executor, state=state)
 
@@ -231,7 +272,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
         with LLM call count == 0.
         """
         mock_transport = MagicMock()
-        planner = QwenPlanner(enabled=True, transport=mock_transport)
+        planner = make_test_planner(enabled=True, transport=mock_transport)
         laya = Laya(agent=self.mock_agent, llm_planner=planner)
 
         fast_path_22 = [
@@ -303,7 +344,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
                 ]
             }
 
-        planner = QwenPlanner(enabled=True, transport=fake_ollama_transport)
+        planner = make_test_planner(enabled=True, transport=fake_ollama_transport)
         laya = Laya(agent=self.mock_agent, llm_planner=planner)
 
         cmds = laya.understand_many(
@@ -338,7 +379,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
             TimeoutError("Ollama timed out"),
             ValueError("Malformed JSON"),
         ]:
-            planner = QwenPlanner(
+            planner = make_test_planner(
                 enabled=True,
                 transport=MagicMock(side_effect=error_to_raise),
             )
@@ -361,7 +402,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
         conn.commit()
 
         handy = Handy(db_path=db_path)
-        laya = Laya(agent=self.mock_agent)
+        laya = make_test_laya(self.mock_agent)
         executor = MagicMock()
         executor.state = self.state
         executed: list[tuple[Action, str | None]] = []
@@ -419,7 +460,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
         'What are you doing?', 'I like YouTube.' are all ignored and never call Qwen3.
         """
         mock_transport = MagicMock()
-        planner = QwenPlanner(enabled=True, transport=mock_transport)
+        planner = make_test_planner(enabled=True, transport=mock_transport)
         laya = Laya(agent=self.mock_agent, llm_planner=planner)
         executor = MagicMock()
         executor.state = self.state
@@ -445,7 +486,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
         Verify concurrent state reads/writes do not corrupt LightState and executor
         recovers cleanly after a failed command.
         """
-        laya = Laya(agent=self.mock_agent)
+        laya = make_test_laya(self.mock_agent)
         executor = MagicMock()
         executor.state = self.state
 
@@ -494,7 +535,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
                 {"action": "CLICK_RESULT", "target": "1"},
             ]
         }
-        planner = QwenPlanner(enabled=True, transport=lambda p: raw_llm_response)
+        planner = make_test_planner(enabled=True, transport=lambda p: raw_llm_response)
         laya = Laya(agent=self.mock_agent, llm_planner=planner)
 
         cmds = laya.understand_many(
@@ -527,7 +568,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
                 {"action": "CLICK_RESULT", "target": "1"},
             ]
         }
-        planner = QwenPlanner(enabled=True, transport=lambda p: raw_llm_response)
+        planner = make_test_planner(enabled=True, transport=lambda p: raw_llm_response)
         cmds = planner.plan_actions(
             "Find a beginner Python tutorial on YouTube and open the most relevant result",
             state=state,
@@ -558,7 +599,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
                 {"action": "CLICK_RESULT", "target": "1"},
             ]
         }
-        planner = QwenPlanner(enabled=True, transport=lambda p: raw_llm_response)
+        planner = make_test_planner(enabled=True, transport=lambda p: raw_llm_response)
         cmds = planner.plan_actions(
             "Find a beginner Python tutorial on YouTube and open the most relevant result",
             state=state,
@@ -666,7 +707,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
         must be automatically cancelled and NEVER executed.
         """
         state = LightState()
-        laya = Laya(agent=self.mock_agent)
+        laya = make_test_laya(self.mock_agent)
         executor = MagicMock()
         executor.state = state
 
@@ -716,7 +757,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
         """
         state = LightState()
         state.browser_open = False
-        planner = QwenPlanner(enabled=False)
+        planner = make_test_planner(enabled=False)
         laya = Laya(agent=self.mock_agent, llm_planner=planner)
 
         cmds = laya.understand_many(
@@ -751,7 +792,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
                 {"action": "CLICK_RESULT", "target": "1"},
             ]
         }
-        planner = QwenPlanner(enabled=True, transport=lambda p: raw_llm_response)
+        planner = make_test_planner(enabled=True, transport=lambda p: raw_llm_response)
         laya = Laya(agent=self.mock_agent, llm_planner=planner)
 
         browser = BrowserController(headless=True)
@@ -783,7 +824,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
             }
         )
 
-        executor = Executor(state=state)
+        executor = Executor(state=state, ai_provider=make_test_ai_provider())
         executor.browser = browser
         executor.mouse = MagicMock()
         executor.mouse.get_screen_size.return_value = (1920, 1080)
@@ -918,14 +959,14 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
                 </html>
                 """
             )
-            executor = Executor(state=state)
+            executor = Executor(state=state, ai_provider=make_test_ai_provider())
             executor.browser = browser
             mouse = MouseController()
             executor.mouse = mouse
             executor.screen = MagicMock()
             executor.screen.get_active_window_title.return_value = "Skip Test"
 
-            laya = Laya(agent=self.mock_agent)
+            laya = make_test_laya(self.mock_agent)
             loop = LightLoop(handy=MagicMock(), laya=laya, executor=executor, state=state)
 
             with patch("computer.mouse.pyautogui") as mock_pag:
@@ -976,13 +1017,13 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
                 </html>
                 """
             )
-            executor = Executor(state=state)
+            executor = Executor(state=state, ai_provider=make_test_ai_provider())
             executor.browser = browser
             executor.mouse = MouseController()
             executor.screen = MagicMock()
             executor.screen.get_active_window_title.return_value = "YouTube Ad"
 
-            laya = Laya(agent=self.mock_agent)
+            laya = make_test_laya(self.mock_agent)
             loop = LightLoop(handy=MagicMock(), laya=laya, executor=executor, state=state)
 
             with patch("computer.mouse.pyautogui") as mock_pag:
@@ -1002,7 +1043,7 @@ class TestProducerConsumerQueueAndLLM(unittest.TestCase):
         self.mock_agent.predict.return_value = {
             "answers": {"action": {"choice": "MOVE_MOUSE"}}
         }
-        laya = Laya(agent=self.mock_agent)
+        laya = make_test_laya(self.mock_agent)
         executor = MagicMock()
         executor.state = self.state
         loop = LightLoop(handy=MagicMock(), laya=laya, executor=executor, state=self.state)
