@@ -60,7 +60,7 @@ def _credential_env_name(value: str | None) -> str | None:
 @dataclass(frozen=True)
 class STTConfig:
     provider: str = "local"
-    runtime: str = "handy"
+    runtime: str = ""
     model: str | None = None
     base_url: str | None = None
     credential_env: str | None = None
@@ -74,11 +74,19 @@ class STTConfig:
             raise ProviderConfigurationError(
                 f"Unknown STT provider '{provider}'. Choose one of: {', '.join(STT_PROVIDER_CHOICES)}."
             )
-        if provider == "local" and runtime not in LOCAL_STT_RUNTIMES:
-            raise ProviderConfigurationError(
-                "The current audio pipeline supports Handy as its local STT runtime. "
-                "Direct microphone model runtimes are not yet available."
-            )
+        if provider == "local":
+            runtime = runtime or "handy"
+            if runtime not in LOCAL_STT_RUNTIMES:
+                raise ProviderConfigurationError(
+                    "The current audio pipeline supports Handy as its local STT runtime. "
+                    "Direct microphone model runtimes are not yet available."
+                )
+        else:
+            runtime = runtime or "custom"
+            if runtime in LOCAL_STT_RUNTIMES:
+                raise ProviderConfigurationError(
+                    "The Handy runtime is only valid with provider=local."
+                )
         if provider == "custom_api" and not self.base_url:
             raise ProviderConfigurationError("Custom API STT requires base_url.")
         object.__setattr__(self, "provider", provider)
@@ -179,10 +187,15 @@ def _defaults_from_environment(env: Mapping[str, str]) -> ProviderSettings:
         selected_ai_model = env.get("LLM_MODEL", "")
     else:
         selected_ai_model = ""
+    selected_stt_provider = env.get("LIGHT_STT_PROVIDER", "local").strip().lower()
+    selected_stt_runtime = env.get(
+        "LIGHT_STT_RUNTIME",
+        "handy" if selected_stt_provider == "local" else "custom",
+    )
     return ProviderSettings(
         stt=STTConfig(
-            provider=env.get("LIGHT_STT_PROVIDER", "local"),
-            runtime=env.get("LIGHT_STT_RUNTIME", "handy"),
+            provider=selected_stt_provider,
+            runtime=selected_stt_runtime,
             model=env.get("LIGHT_STT_MODEL") or None,
             base_url=env.get("LIGHT_STT_BASE_URL") or None,
             credential_env=env.get("LIGHT_STT_CREDENTIAL_ENV") or None,
@@ -232,6 +245,27 @@ def _merge_ai_section(defaults: AIConfig, raw: object) -> dict:
             values["model"] = ""
         if "base_url" not in raw:
             values["base_url"] = None
+        if "credential_env" not in raw:
+            values["credential_env"] = None
+    return values
+
+
+def _merge_stt_section(defaults: STTConfig, raw: object) -> dict:
+    values = _merge_section(defaults, raw)
+    if not isinstance(raw, dict):
+        return values
+
+    selected_provider = str(raw.get("provider", defaults.provider)).strip().lower()
+    if selected_provider != defaults.provider:
+        for field, empty_value in (
+            ("runtime", ""),
+            ("model", None),
+            ("base_url", None),
+            ("credential_env", None),
+            ("db_path", None),
+        ):
+            if field not in raw:
+                values[field] = empty_value
     return values
 
 
@@ -264,7 +298,7 @@ def load_provider_settings(
             f"Unknown provider configuration section(s): {', '.join(sorted(unknown))}."
         )
     return ProviderSettings(
-        stt=STTConfig(**_merge_section(defaults.stt, raw.get("stt"))),
+        stt=STTConfig(**_merge_stt_section(defaults.stt, raw.get("stt"))),
         ai=AIConfig(**_merge_ai_section(defaults.ai, raw.get("ai"))),
     )
 

@@ -15,7 +15,7 @@ selection but retained as the default local configuration.
 Active
 
 ## Decision
-Route high-frequency, structured voice commands through deterministic regex and grammatical parsers (`brain/decision.py`) as the primary execution path, reserving the local Large Language Model (Qwen3 1.7B) exclusively for complex, multi-clause natural language search and browsing tasks.
+Route high-frequency, structured voice commands through deterministic regex and grammatical parsers (`brain/decision.py`) as the primary execution path, reserving the selected AI provider/model for complex, multi-clause natural language search and browsing tasks. Local Ollama/Qwen3 remains the default.
 
 ## Reason
 1. **Latency**: Deterministic parsing completes in **<1ms**, compared to 300ms–2000ms for local LLM token generation. For common navigation (`"open youtube"`, `"scroll down"`, `"press enter"`), sub-millisecond execution is essential for an ambient voice experience.

@@ -59,6 +59,12 @@ class TestProviderConfiguration(unittest.TestCase):
             AIConfig(provider="automatic", runtime="", model="surprise")
         with self.assertRaisesRegex(ProviderConfigurationError, "audio pipeline"):
             STTConfig(provider="local", runtime="faster_whisper", model="small")
+        with self.assertRaisesRegex(ProviderConfigurationError, "only valid with provider=local"):
+            STTConfig(
+                provider="custom_api",
+                runtime="handy",
+                base_url="https://stt.example.test",
+            )
 
     def test_endpoint_secrets_must_use_credential_environment_reference(self):
         with self.assertRaisesRegex(ProviderConfigurationError, "credential_env"):
@@ -178,6 +184,162 @@ class TestProviderConfiguration(unittest.TestCase):
         self.assertEqual(settings.ai.runtime, "")
         self.assertIsNone(settings.ai.base_url)
 
+    def test_partial_ai_provider_switches_clear_previous_provider_state(self):
+        switches = (
+            ("local", "gemini"),
+            ("local", "openai"),
+            ("local", "claude"),
+            ("local", "custom_api"),
+            ("gemini", "openai"),
+            ("openai", "claude"),
+            ("claude", "gemini"),
+            ("custom_api", "openai"),
+            ("gemini", "local"),
+            ("openai", "local"),
+            ("claude", "local"),
+            ("custom_api", "local"),
+            ("openai", "gemini"),
+            ("claude", "openai"),
+            ("gemini", "claude"),
+            ("openai", "custom_api"),
+        )
+        for source, destination in switches:
+            with self.subTest(source=source, destination=destination), tempfile.TemporaryDirectory() as temp_dir:
+                path = Path(temp_dir) / "providers.json"
+                destination_model = "qwen3:1.7b" if destination == "local" else f"{destination}-model"
+                ai_section = {"provider": destination, "model": destination_model}
+                if destination == "custom_api":
+                    ai_section["base_url"] = "https://destination.example.test/v1"
+                path.write_text(json.dumps({"ai": ai_section}), encoding="utf-8")
+                source_runtime = "ollama" if source == "local" else ""
+                source_base_url = (
+                    "http://127.0.0.1:11434"
+                    if source == "local"
+                    else "https://source.example.test/v1"
+                )
+                settings = load_provider_settings(
+                    path=path,
+                    environ={
+                        "LIGHT_AI_PROVIDER": source,
+                        "LIGHT_AI_RUNTIME": source_runtime,
+                        "LIGHT_AI_MODEL": f"{source}-model",
+                        "LIGHT_AI_BASE_URL": source_base_url,
+                        "LIGHT_AI_CREDENTIAL_ENV": "LIGHT_OLD_PROVIDER_KEY",
+                    },
+                )
+
+                self.assertEqual(settings.ai.provider, destination)
+                self.assertEqual(settings.ai.model, destination_model)
+                self.assertIsNone(settings.ai.credential_env)
+                if destination == "local":
+                    self.assertEqual(settings.ai.runtime, "ollama")
+                    self.assertEqual(settings.ai.base_url, "http://127.0.0.1:11434")
+                else:
+                    self.assertEqual(settings.ai.runtime, "")
+                    expected_url = (
+                        "https://destination.example.test/v1"
+                        if destination == "custom_api"
+                        else None
+                    )
+                    self.assertEqual(settings.ai.base_url, expected_url)
+
+    def test_explicit_new_provider_fields_survive_partial_switch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "providers.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "ai": {
+                            "provider": "claude",
+                            "model": "claude-model",
+                            "base_url": "https://claude.example.test/v1",
+                            "credential_env": "LIGHT_NEW_CLAUDE_KEY",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = load_provider_settings(
+                path=path,
+                environ={
+                    "LIGHT_AI_PROVIDER": "openai",
+                    "LIGHT_AI_MODEL": "openai-model",
+                    "LIGHT_AI_CREDENTIAL_ENV": "LIGHT_OLD_OPENAI_KEY",
+                },
+            )
+        self.assertEqual(settings.ai.base_url, "https://claude.example.test/v1")
+        self.assertEqual(settings.ai.credential_env, "LIGHT_NEW_CLAUDE_KEY")
+
+    def test_partial_stt_provider_switches_clear_provider_specific_state(self):
+        cases = (
+            (
+                {
+                    "LIGHT_STT_PROVIDER": "local",
+                    "LIGHT_STT_RUNTIME": "handy",
+                    "LIGHT_STT_MODEL": "old-local-model",
+                    "LIGHT_STT_CREDENTIAL_ENV": "LIGHT_OLD_STT_KEY",
+                    "HANDY_DB_PATH": "old-history.db",
+                    "LIGHT_STT_TIMEOUT": "2.5",
+                },
+                {"provider": "custom_api", "base_url": "https://stt.example.test"},
+                "custom",
+            ),
+            (
+                {
+                    "LIGHT_STT_PROVIDER": "custom_api",
+                    "LIGHT_STT_RUNTIME": "custom-v1",
+                    "LIGHT_STT_MODEL": "old-custom-model",
+                    "LIGHT_STT_BASE_URL": "https://old-stt.example.test",
+                    "LIGHT_STT_CREDENTIAL_ENV": "LIGHT_OLD_STT_KEY",
+                    "LIGHT_STT_TIMEOUT": "2.5",
+                },
+                {"provider": "local"},
+                "handy",
+            ),
+        )
+        for environ, stt_section, expected_runtime in cases:
+            with self.subTest(destination=stt_section["provider"]), tempfile.TemporaryDirectory() as temp_dir:
+                path = Path(temp_dir) / "providers.json"
+                path.write_text(json.dumps({"stt": stt_section}), encoding="utf-8")
+                settings = load_provider_settings(path=path, environ=environ)
+
+                self.assertEqual(settings.stt.runtime, expected_runtime)
+                self.assertIsNone(settings.stt.model)
+                self.assertIsNone(settings.stt.credential_env)
+                self.assertIsNone(settings.stt.db_path)
+                self.assertEqual(settings.stt.timeout, 2.5)
+
+    def test_explicit_custom_stt_fields_survive_partial_switch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "providers.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "stt": {
+                            "provider": "custom_api",
+                            "runtime": "feed-v2",
+                            "model": "transcript-events-v2",
+                            "base_url": "https://stt.example.test",
+                            "credential_env": "LIGHT_NEW_STT_KEY",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = load_provider_settings(
+                path=path,
+                environ={
+                    "LIGHT_STT_PROVIDER": "local",
+                    "LIGHT_STT_RUNTIME": "handy",
+                    "HANDY_DB_PATH": "old-history.db",
+                },
+            )
+        self.assertEqual(settings.stt.runtime, "feed-v2")
+        self.assertEqual(settings.stt.model, "transcript-events-v2")
+        self.assertEqual(settings.stt.base_url, "https://stt.example.test")
+        self.assertEqual(settings.stt.credential_env, "LIGHT_NEW_STT_KEY")
+        self.assertIsNone(settings.stt.db_path)
+
     def test_inaccessible_provider_config_has_clear_configuration_error(self):
         with patch(
             "providers.configuration.Path.exists",
@@ -275,6 +437,43 @@ class TestSTTProviders(unittest.TestCase):
 
 
 class TestAIProviders(unittest.TestCase):
+    def test_provider_switch_never_sends_previous_provider_credential(self):
+        captured_headers = []
+
+        def transport(method, url, payload, headers, timeout):
+            captured_headers.append(headers)
+            return {"data": [{"id": "claude-model"}]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "providers.json"
+            path.write_text(
+                json.dumps({"ai": {"provider": "claude", "model": "claude-model"}}),
+                encoding="utf-8",
+            )
+            settings = load_provider_settings(
+                path=path,
+                environ={
+                    "LIGHT_AI_PROVIDER": "openai",
+                    "LIGHT_AI_MODEL": "openai-model",
+                    "LIGHT_AI_CREDENTIAL_ENV": "LIGHT_OLD_OPENAI_KEY",
+                },
+            )
+
+        self.assertIsNone(settings.ai.credential_env)
+        with patch.dict(
+            "os.environ",
+            {
+                "LIGHT_OLD_OPENAI_KEY": "wrong-provider-secret",
+                "ANTHROPIC_API_KEY": "correct-claude-secret",
+            },
+            clear=True,
+        ):
+            status = build_ai_provider(settings.ai, transport=transport).validate()
+
+        self.assertTrue(status.available)
+        self.assertEqual(captured_headers[0]["x-api-key"], "correct-claude-secret")
+        self.assertNotIn("wrong-provider-secret", captured_headers[0].values())
+
     def test_ollama_model_discovery_and_completion(self):
         calls = []
 

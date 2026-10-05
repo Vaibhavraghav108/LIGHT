@@ -296,11 +296,22 @@ class TestNewFeatures(unittest.TestCase):
         self.assertEqual(media_cmd.target, "10")
 
     def test_16_agent_task_initialization_logs_and_ollama(self):
-        """16. Autonomous browser agent initializes ChatOllama with configured Ollama model and endpoint."""
+        """16. Autonomous browser agent initializes the explicitly injected Ollama provider."""
         from browser.agent import AutonomousBrowserAgent
-        from config import LLM_BASE_URL, LLM_MODEL
+        from providers.ai import OllamaAIProvider
+        from providers.configuration import AIConfig
 
-        agent = AutonomousBrowserAgent()
+        model = "qwen3:1.7b"
+        endpoint = "http://127.0.0.1:11434"
+        provider = OllamaAIProvider(
+            AIConfig(
+                provider="local",
+                runtime="ollama",
+                model=model,
+                base_url=endpoint,
+            )
+        )
+        agent = AutonomousBrowserAgent(ai_provider=provider)
         with patch("browser_use.llm.ChatOllama") as mock_chat_ollama, \
              patch("browser.agent.log_info") as mock_log_info:
             mock_chat_ollama.return_value = MagicMock()
@@ -308,14 +319,14 @@ class TestNewFeatures(unittest.TestCase):
             self.assertIsNotNone(llm)
             mock_chat_ollama.assert_called_once()
             _, kwargs = mock_chat_ollama.call_args
-            self.assertEqual(kwargs.get("model"), LLM_MODEL)
-            self.assertEqual(kwargs.get("host"), LLM_BASE_URL)
+            self.assertEqual(kwargs.get("model"), model)
+            self.assertEqual(kwargs.get("host"), endpoint)
 
             # Check logging calls
             logged_messages = [call.args[0] for call in mock_log_info.call_args_list]
             self.assertTrue(any("LLM provider: Ollama" in msg for msg in logged_messages))
-            self.assertTrue(any(f"LLM model: {LLM_MODEL}" in msg for msg in logged_messages))
-            self.assertTrue(any(f"LLM endpoint: {LLM_BASE_URL}" in msg for msg in logged_messages))
+            self.assertTrue(any(f"LLM model: {model}" in msg for msg in logged_messages))
+            self.assertTrue(any(f"LLM endpoint: {endpoint}" in msg for msg in logged_messages))
             self.assertTrue(any("Browser Use initialized" in msg for msg in logged_messages))
 
     def test_17_agent_task_failure_restores_state_and_records_error(self):
