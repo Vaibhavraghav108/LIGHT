@@ -22,4 +22,5 @@ screenshots/
 .light_chromium_profile/
 .light_browseruse/
 .light.pid
+.light/
 tests/.tmp_integration/

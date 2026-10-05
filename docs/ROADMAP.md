@@ -35,6 +35,9 @@ physical validation on every supported host.
    heterogeneous display scale factors on both operating systems.
 5. **Clipboard integration reliability** — distinguish unavailable/locked host
    clipboards from product regressions without weakening verification.
+6. **Live provider compatibility matrix** — validate opted-in Ollama, LM
+   Studio, OpenAI, Claude, Gemini, and custom endpoints without adding secrets
+   or live-account requirements to default CI.
 
 ## Near-term improvements
 
@@ -47,6 +50,9 @@ physical validation on every supported host.
 - [ ] improve completed-agent result delivery beyond log/state inspection;
 - [ ] add hermetic dependency resolution and `pip check` to an explicit CI
   policy once the conflict is resolved.
+- [ ] integrate OS credential vaults while retaining environment-variable
+  support for headless/CI operation;
+- [ ] add a graphical provider/model settings surface over the validated CLI;
 
 ## Exploratory, not committed
 

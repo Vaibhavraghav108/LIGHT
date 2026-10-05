@@ -10,6 +10,7 @@ from computer.mouse import MouseController
 from computer.platform_macos import MacOSPlatformController
 from computer.platform_windows import WindowsPlatformController
 from core.executor import Executor
+from tests.provider_test_utils import make_test_ai_provider
 
 
 class TestComputerControl(unittest.TestCase):
@@ -175,7 +176,12 @@ class TestComputerControl(unittest.TestCase):
 
     @patch("computer.apps.subprocess.Popen")
     def test_executor_routes_open_app_and_updates_state(self, mock_popen):
-        executor = Executor()
+        executor = Executor(ai_provider=make_test_ai_provider())
+        executor.screen = MagicMock()
+        executor.screen.get_foreground_window_info.return_value = {
+            "title": "Untitled - Notepad",
+            "process_name": "notepad.exe",
+        }
         result = executor.execute(Command(Action.OPEN_APP, "Notepad"), raw_text="Open Notepad")
         self.assertEqual(result, "OK")
         self.assertEqual(executor.state.current_app, "notepad")
@@ -183,7 +189,7 @@ class TestComputerControl(unittest.TestCase):
         mock_popen.assert_any_call(expected_cmd)
 
     def test_executor_uses_playwright_chromium_for_browser_commands(self):
-        executor = Executor()
+        executor = Executor(ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         executor.apps = MagicMock()
         executor.keyboard = MagicMock()
@@ -209,7 +215,7 @@ class TestComputerControl(unittest.TestCase):
         executor.browser.click_result.assert_called_once_with(1, mouse_controller=executor.mouse)
 
     def test_executor_close_browser_only_closes_controlled_session(self):
-        executor = Executor()
+        executor = Executor(ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         executor.apps = MagicMock()
         executor.browser.is_active.return_value = False
@@ -222,7 +228,7 @@ class TestComputerControl(unittest.TestCase):
         executor.apps.close.assert_not_called()
 
     def test_executor_routes_move_mouse_to_browser_element(self):
-        executor = Executor()
+        executor = Executor(ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         executor.browser.is_active.return_value = True
         executor.browser.move_mouse_to_element.return_value = (740, 195)
@@ -238,7 +244,7 @@ class TestComputerControl(unittest.TestCase):
         )
 
     def test_executor_routes_clipboard_shortcuts_through_platform_keyboard(self):
-        executor = Executor()
+        executor = Executor(ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         executor.browser.is_active.return_value = False
         executor.keyboard = MagicMock()

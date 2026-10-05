@@ -20,18 +20,27 @@ converted into a skip; source and tests were not changed by this documentation
 milestone. After the targeted pass, the final full rerun completed in 26.050s
 with **147 passing and 8 skipped**.
 
+The provider/model feature branch adds 36 deterministic provider regression
+tests plus one Handy-path regression. Its final local Windows full-suite result
+is **192 discovered, 184 passing, 8 skipped, 0 failures, and 0 errors** with
+both the persisted non-default
+`qwen2.5:3b` selection and a clean/default `qwen3:1.7b` selection. These tests
+mock provider HTTP/SDK boundaries; they do not make live OpenAI, Claude, Gemini,
+LM Studio, Ollama, Handy, or custom-service claims.
+
 ## Test layers
 
 | Layer | Files | Count | What it proves | What it does not prove |
 | --- | --- | ---: | --- | --- |
-| Unit/parser/platform mocks | `test_laya`, `test_voice*`, `test_computer`, `test_browser`, `test_platform_macos` | 59 | parsing, routing, validation, provider behavior, platform commands | real OS permissions/hardware/GUI results |
+| Unit/parser/platform mocks | `test_laya`, `test_voice*`, `test_computer`, `test_browser`, `test_platform_macos` | 60 | parsing, routing, validation, provider behavior, platform commands | real OS permissions/hardware/GUI results |
 | Local real-browser integration | `test_integration_local_browser` | 5 | headless Chromium against localhost DOM; copy path reaches real clipboard | public websites, real display coordinates, clipboard availability everywhere |
 | Queue/LLM/reliability | `test_queue_and_llm`, `test_new_features` | 83 | concurrency, cancellation, normalization, ownership, agent lifecycle with mocks/local pages | live Ollama or a full Browser Use research run |
+| Provider/model architecture | `test_provider_architecture` | 36 | configuration, provider-aware defaults, strict activation validation, protocol shapes, credentials, redaction, no-fallback, planner/agent reuse | live external accounts, model quality, direct audio STT |
 | Opt-in host smoke | `test_windows_smoke`, `test_macos_smoke` | 8 | selected browser, clipboard, display, and provider observations on the current host | destructive actions or full end-to-end voice workflow |
 
-Per-file counts: voice 6, voice provider 5, Laya 16, computer 14,
+Per-file counts: voice 6, voice provider 6, Laya 16, computer 14,
 macOS platform 9, browser 9, local browser 5, queue/LLM 25, new features 58,
-Windows smoke 4, macOS smoke 4.
+provider architecture 36, Windows smoke 4, macOS smoke 4.
 
 ## Stable commands
 
@@ -39,7 +48,7 @@ Windows PowerShell:
 
 ```powershell
 .\lightenv\Scripts\python.exe -m unittest discover -s tests -v
-.\lightenv\Scripts\python.exe -m compileall -q main.py config.py voice brain computer browser core utils tests
+.\lightenv\Scripts\python.exe -m compileall -q main.py config.py providers voice brain computer browser core utils tests
 .\lightenv\Scripts\python.exe -m pip check
 git diff --check
 ```
@@ -48,7 +57,7 @@ macOS:
 
 ```bash
 ./lightenv/bin/python -m unittest discover -s tests -v
-./lightenv/bin/python -m compileall -q main.py config.py voice brain computer browser core utils tests
+./lightenv/bin/python -m compileall -q main.py config.py providers voice brain computer browser core utils tests
 ./lightenv/bin/python -m pip check
 git diff --check
 ```
@@ -84,8 +93,11 @@ from `macos-latest` CI.
   wait behavior;
 - listener independence under a slow executor and rapid ordered transcripts;
 - failed-plan pruning without cross-utterance cancellation;
-- deterministic fast paths making zero Qwen calls;
+- deterministic fast paths making zero AI-provider/model calls;
 - malformed, unavailable, and control-token LLM output;
+- provider/model independence, explicit registry selection, candidate
+  validation, model discovery, credential indirection, error redaction, and no
+  implicit provider fallback;
 - Browser Use admission races, duplicate rejection, result state, shutdown, and
   ownership preservation during deterministic browser work;
 - inactive/unchanged/mismatched named destinations and cancellable verification;

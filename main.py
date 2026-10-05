@@ -7,10 +7,13 @@ from pathlib import Path
 from computer.platform_factory import get_platform_controller
 from voice.factory import get_voice_provider
 from brain.laya import Laya
+from brain.llm import QwenPlanner
 from core.executor import Executor
 from core.loop import LightLoop
 from core.state import LightState
 from utils.logger import log_info, log_debug
+from providers.configuration import load_provider_settings
+from providers.ai import build_ai_provider
 
 PID_FILE = Path(__file__).resolve().parent / ".light.pid"
 
@@ -126,10 +129,22 @@ def main():
     ensure_single_instance()
 
     # Load components
+    provider_settings = load_provider_settings()
     state = LightState()
-    voice_provider = get_voice_provider()
-    laya = Laya()
-    executor = Executor(state=state)
+    voice_provider = get_voice_provider(provider_config=provider_settings.stt)
+    log_info(
+        "STT selection: "
+        f"provider={provider_settings.stt.provider} runtime={provider_settings.stt.runtime} "
+        f"model={provider_settings.stt.model or 'service-managed'}"
+    )
+    log_info(
+        "AI selection: "
+        f"provider={provider_settings.ai.provider} runtime={provider_settings.ai.runtime or 'api'} "
+        f"model={provider_settings.ai.model} enabled={provider_settings.ai.enabled}"
+    )
+    ai_provider = build_ai_provider(provider_settings.ai)
+    laya = Laya(llm_planner=QwenPlanner(ai_provider=ai_provider))
+    executor = Executor(state=state, ai_provider=ai_provider)
 
     # Create LIGHT loop
     light = LightLoop(

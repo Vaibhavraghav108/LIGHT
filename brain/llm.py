@@ -21,6 +21,8 @@ from config import (
     LLM_TIMEOUT,
     WEBSITES,
 )
+from providers.ai import AIProvider, ProviderRequestError, build_ai_provider
+from providers.configuration import AIConfig, ProviderConfigurationError, load_provider_settings
 from utils.logger import log_debug, log_llm, log_warning
 
 ALLOWED_LLM_ACTIONS = {action.name: action for action in Action}
@@ -64,7 +66,7 @@ def validate_llm_action(
     planning_state=None,
 ) -> Command:
     """
-    Strictly validate and normalize a single action dict returned by Qwen3 1.7B.
+    Strictly validate and normalize a single action dict returned by an AI provider.
     Raises ValueError if the action or target is unsafe or invalid.
     """
     if not isinstance(item, dict):
@@ -186,7 +188,7 @@ def validate_llm_action(
 
 class QwenPlanner:
     """
-    Optional local Qwen3 1.7B planner via Ollama.
+    Backward-compatible structured-action planner using the selected AIProvider.
     Only invoked when the fast deterministic parser cannot handle a complex/multi-step command.
     """
 
@@ -198,13 +200,41 @@ class QwenPlanner:
         base_url: str = LLM_BASE_URL,
         timeout: float = LLM_TIMEOUT,
         transport=None,
+        ai_provider: AIProvider | None = None,
     ):
-        self.enabled = LLM_ENABLED if enabled is None else bool(enabled)
-        self.provider = provider
-        self.model = model
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+        configured = ai_provider.config if ai_provider is not None else load_provider_settings().ai
+        self.enabled = configured.enabled if enabled is None else bool(enabled)
+        self.provider = configured.provider if provider == LLM_PROVIDER else provider
+        self.runtime = configured.runtime
+        self.model = configured.model if model == LLM_MODEL else model
+        self.base_url = (configured.base_url or "") if base_url == LLM_BASE_URL else base_url.rstrip("/")
+        self.timeout = configured.timeout if timeout == LLM_TIMEOUT else timeout
         self._transport = transport
+        if ai_provider is not None:
+            self.ai_provider = ai_provider
+            self.provider = ai_provider.provider_name
+            self.runtime = ai_provider.runtime_name
+            self.model = ai_provider.model
+            self.base_url = ai_provider.config.base_url or ""
+            self.timeout = ai_provider.config.timeout
+        elif transport is not None:
+            # Historical tests inject the planner transport directly. Preserve
+            # that zero-network contract without constructing another adapter.
+            self.ai_provider = None
+        else:
+            if self.provider in {"ollama", "lm_studio"}:
+                self.runtime = self.provider
+                self.provider = "local"
+            provider_config = AIConfig(
+                enabled=self.enabled,
+                provider=self.provider,
+                runtime=self.runtime,
+                model=self.model,
+                base_url=self.base_url or configured.base_url,
+                credential_env=configured.credential_env,
+                timeout=self.timeout,
+            )
+            self.ai_provider = build_ai_provider(provider_config)
         self._unavailable_until = 0.0
         self.last_latency_ms: float | None = None
 
@@ -255,9 +285,38 @@ class QwenPlanner:
                 return json.loads(cleaned_content)
             return content
 
+    @staticmethod
+    def _parse_provider_content(content: object) -> dict:
+        if isinstance(content, dict):
+            return content
+        if not isinstance(content, str):
+            raise ValueError("AI provider response was not text or a JSON object.")
+        cleaned_content = re.sub(r"/no_think", "", content, flags=re.IGNORECASE)
+        cleaned_content = re.sub(
+            r"<think>[\s\S]*?</think>",
+            "",
+            cleaned_content,
+            flags=re.IGNORECASE,
+        ).strip()
+        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned_content)
+        if json_match:
+            cleaned_content = json_match.group(1).strip()
+        return json.loads(cleaned_content)
+
+    def _call_configured_provider(self, prompt: str) -> dict:
+        # Historical unit tests inject a prompt-only transport directly into
+        # QwenPlanner. Production execution always delegates through the
+        # selected AIProvider, including local Ollama.
+        if self._transport is not None:
+            return self._call_ollama(prompt)
+        if self.ai_provider is None:
+            raise ProviderConfigurationError("No AI provider is configured.")
+        content = self.ai_provider.complete(_SYSTEM_PROMPT, prompt)
+        return self._parse_provider_content(content)
+
     def plan_actions(self, text: str, state=None) -> list[Command] | None:
         """
-        Ask Qwen3 1.7B to plan 1 or more structured LIGHT commands.
+        Ask the selected AI provider to plan 1 or more structured LIGHT commands.
         Returns a validated list of Commands, or None if LLM is disabled/unavailable/fails.
         """
         if not self.enabled:
@@ -272,14 +331,21 @@ class QwenPlanner:
 
         start_ts = time.perf_counter()
         try:
-            response_data = self._call_ollama(self._build_prompt(text, state=state))
+            response_data = self._call_configured_provider(self._build_prompt(text, state=state))
             latency_ms = round((time.perf_counter() - start_ts) * 1000.0, 1)
             self.last_latency_ms = latency_ms
-            log_llm(f"model={self.model} latency={latency_ms}ms")
-        except (urllib.error.URLError, TimeoutError, OSError) as err:
-            # Back off for 15s when Ollama is offline so subsequent commands don't wait on socket timeout
+            log_llm(
+                f"provider={self.provider} runtime={self.runtime or 'api'} "
+                f"model={self.model} latency={latency_ms}ms"
+            )
+        except (urllib.error.URLError, TimeoutError, OSError, ProviderRequestError) as err:
+            # Back off for 15s when the selected provider is offline so
+            # subsequent commands do not repeatedly wait on socket timeout.
             self._unavailable_until = time.monotonic() + 15.0
-            log_debug(f"Ollama ({self.model}) unavailable, using fast path fallback: {err}")
+            log_debug(
+                f"Configured AI provider {self.provider}/{self.model} unavailable; "
+                f"using deterministic fallback: {err}"
+            )
             return None
         except Exception as err:
             log_warning(f"LLM planning failed, falling back gracefully: {err}")

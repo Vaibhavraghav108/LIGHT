@@ -8,12 +8,14 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from voice.base import VoiceInputProvider
 from voice.handy_provider import HandyVoiceProvider
 from voice.unavailable_provider import UnavailableVoiceProvider
 from voice.factory import get_voice_provider
 from voice.handy import Handy
+from providers.configuration import STTConfig
 
 
 class TestVoiceProviders(unittest.TestCase):
@@ -70,17 +72,32 @@ class TestVoiceProviders(unittest.TestCase):
         self.assertEqual(latest["text"], "Open Chrome")
 
     def test_factory_returns_handy_when_db_exists(self):
-        provider = get_voice_provider(db_path=self.db_path)
+        provider = get_voice_provider(
+            db_path=self.db_path,
+            provider_config=STTConfig(provider="local", runtime="handy"),
+        )
         self.assertIsInstance(provider, HandyVoiceProvider)
         self.assertTrue(provider.is_available())
 
     def test_factory_returns_unavailable_when_db_missing_without_crashing(self):
         missing_db = Path(self.temp_dir.name) / "does_not_exist.db"
-        provider = get_voice_provider(db_path=missing_db)
+        provider = get_voice_provider(
+            db_path=missing_db,
+            provider_config=STTConfig(provider="local", runtime="handy"),
+        )
         self.assertIsInstance(provider, UnavailableVoiceProvider)
         self.assertFalse(provider.is_available())
         msg = provider.get_status_message().lower()
         self.assertTrue("not found" in msg or "not currently verified" in msg or "unavailable" in msg)
+
+    def test_factory_returns_unavailable_when_handy_path_is_inaccessible(self):
+        with patch("voice.factory.Path.exists", side_effect=PermissionError("access denied")):
+            provider = get_voice_provider(
+                db_path=self.db_path,
+                provider_config=STTConfig(provider="local", runtime="handy"),
+            )
+        self.assertIsInstance(provider, UnavailableVoiceProvider)
+        self.assertFalse(provider.is_available())
 
 
 if __name__ == "__main__":

@@ -4,7 +4,45 @@
 
 ---
 
-## [Unreleased] — Documentation consolidation
+## [Unreleased] — Provider and model architecture
+
+### Added
+- Typed, independent STT and AI provider/model configuration with an ignored,
+  atomically written `.light/providers.json` user file.
+- AI adapters for local Ollama, local LM Studio, OpenAI, Claude, Gemini, and
+  custom OpenAI-compatible endpoints, including model discovery and sanitized
+  status validation.
+- `python -m providers` commands to show, validate, discover, and independently
+  activate STT/AI selections without editing source.
+- A documented custom transcript-feed `VoiceInputProvider` while preserving
+  Handy as the default local runtime.
+- Provider architecture, configuration, credential, redaction, no-fallback,
+  planner, and Browser Use regression tests (36 provider regression tests plus
+  one inaccessible-Handy-path regression). The current full-suite baseline is
+  192 discovered, 184 passing, 8 opt-in host smoke tests skipped, 0 failures,
+  and 0 errors.
+
+### Changed
+- `QwenPlanner` remains backward-compatible but delegates every production
+  inference, including Ollama, to the selected `AIProvider` and applies the
+  same action validation to every model. Its prompt-only injected transport is
+  retained solely for isolated legacy tests.
+- Browser Use now uses the selected AI provider/model rather than hardcoding
+  `ChatOllama`; local Ollama/Qwen3 remains the default.
+- Startup reports active STT and AI provider/runtime/model without printing
+  credential values.
+- Provider-specific defaults no longer leak Ollama runtime/model/endpoint
+  values into explicit cloud or custom selections. Empty model inventories,
+  absent configured models, and missing explicitly named credentials now fail
+  activation validation.
+
+### Safety and limits
+- Cloud AI is opt-in and never a fallback. Credential values are resolved from
+  environment variables and provider/SDK errors are redacted.
+- Direct microphone capture, VAD, and Whisper remain unimplemented because the
+  current voice contract begins at completed transcript events.
+
+### Documentation consolidation
 
 ### Documentation
 - Added `docs/README.md` as the documentation inventory, evidence glossary, and

@@ -2,15 +2,15 @@ import unittest
 from unittest.mock import MagicMock
 
 from brain.commands import Action, Command
-from brain.laya import Laya
 from core.state import LightState
+from tests.provider_test_utils import make_test_laya
 
 
 class TestLayaAndDecisions(unittest.TestCase):
 
     def setUp(self):
         self.mock_agent = MagicMock()
-        self.laya = Laya(agent=self.mock_agent)
+        self.laya = make_test_laya(self.mock_agent)
 
     def _mock_laya_choice(self, choice: str):
         self.mock_agent.predict.return_value = {

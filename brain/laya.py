@@ -26,7 +26,7 @@ class Laya:
             log_laya("Model loaded.")
 
         # If a unit test passes a mock `agent` without an explicit `llm_planner`,
-        # disable live network Ollama calls by default so unit tests stay fast and isolated.
+        # disable live AI-provider calls by default so unit tests stay fast and isolated.
         if llm_planner is not None:
             self.llm = llm_planner
         elif agent is not None:
@@ -59,7 +59,7 @@ class Laya:
         Order of precedence:
         1. Fast Path: Multi-step deterministic parser (<1ms)
         2. Fast Path: Single-step deterministic parser (<1ms)
-        3. Complex Path: Qwen3 1.7B local LLM via Ollama + Plan Normalization
+        3. Complex Path: selected AI provider/model + Plan Normalization
         4. Complex Fallback: Deterministic complex search-and-open fallback + Plan Normalization
         5. Fallback: Laya classifier + strict safety validation
         """
@@ -77,7 +77,7 @@ class Laya:
         if deterministic_cmd is not None:
             return [deterministic_cmd]
 
-        # 3. Complex Path: Optional Qwen3 1.7B LLM planner
+        # 3. Complex Path: Optional selected AI provider/model planner
         if self.llm is not None and self.llm.enabled:
             llm_cmds = self.llm.plan_actions(text, state=state)
             if llm_cmds:

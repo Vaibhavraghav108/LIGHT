@@ -1,7 +1,9 @@
 import asyncio
 import os
 import threading
-from config import BROWSER_USE_CONFIG_DIR, LLM_BASE_URL, LLM_MODEL, LLM_TIMEOUT
+from config import BROWSER_USE_CONFIG_DIR, LLM_TIMEOUT
+from providers.ai import AIProvider, build_ai_provider
+from providers.configuration import load_provider_settings
 from utils.logger import log_browser, log_debug, log_info, log_warning
 
 
@@ -9,11 +11,11 @@ class AutonomousBrowserAgent:
     """
     Subordinate autonomous browser agent powered by browser-use.
     Used ONLY for open-ended, complex, goal-oriented research and comparison tasks.
-    Configured to use the local Ollama instance (qwen3:1.7b) shared across LIGHT.
+    Reuses LIGHT's explicitly selected AI provider and model.
     Remains strictly under LIGHT's priority STOP and cancellation control.
     """
 
-    def __init__(self):
+    def __init__(self, ai_provider: AIProvider | None = None):
         # browser-use defaults optional telemetry/cloud sync to enabled and
         # otherwise writes under the user's global config directory. Reassert
         # LIGHT's private, workspace-local defaults before its lazy import.
@@ -23,6 +25,7 @@ class AutonomousBrowserAgent:
         self._running = False
         self._lock = threading.Lock()
         self._current_agent = None
+        self.ai_provider = ai_provider or build_ai_provider(load_provider_settings().ai)
 
     def is_running(self) -> bool:
         with self._lock:
@@ -88,36 +91,31 @@ class AutonomousBrowserAgent:
 
     def _get_llm(self):
         """
-        Initialize and return Browser Use's native ChatOllama wrapper
-        configured to use LIGHT's local Ollama endpoint and model (qwen3:1.7b).
+        Initialize Browser Use's native wrapper for the explicitly selected AI
+        provider and model. Provider selection never falls back implicitly.
         """
-        try:
-            from browser_use.llm import ChatOllama
-        except ImportError as e:
-            msg = f"Browser Use ChatOllama not available: {e}"
-            log_warning(f"[AGENT] {msg}")
-            raise RuntimeError(msg)
-
-        provider = "Ollama"
-        model = LLM_MODEL  # qwen3:1.7b
-        endpoint = LLM_BASE_URL  # http://127.0.0.1:11434
+        provider = (
+            self.ai_provider.runtime_name
+            if self.ai_provider.provider_name == "local"
+            else self.ai_provider.provider_name
+        ).replace("_", " ").title()
+        model = self.ai_provider.model
+        endpoint = self.ai_provider.config.base_url or "provider default"
         # On local CPU, complex schema generation requires adequate timeout (>=180s)
-        timeout = max(float(LLM_TIMEOUT or 8.0), 180.0)
+        timeout = max(float(self.ai_provider.config.timeout or LLM_TIMEOUT), 180.0)
 
         log_info(f"[AGENT] LLM provider: {provider}")
         log_info(f"[AGENT] LLM model: {model}")
         log_info(f"[AGENT] LLM endpoint: {endpoint}")
 
         try:
-            llm = ChatOllama(
-                model=model,
-                host=endpoint,
-                timeout=timeout,
-            )
+            llm = self.ai_provider.create_browser_use_llm(timeout=timeout)
             log_info("[AGENT] Browser Use initialized")
             return llm
-        except Exception as e:
-            msg = f"Failed to initialize ChatOllama({model} @ {endpoint}): {e}"
+        except Exception:
+            # Third-party SDK exceptions can echo request headers or URLs.
+            # Keep the user-facing failure useful without exposing credentials.
+            msg = f"Failed to initialize {provider} model '{model}'. Check provider status and credentials."
             log_warning(f"[AGENT] {msg}")
             raise RuntimeError(msg)
 

@@ -1,4 +1,4 @@
-# LIGHT Feature Status (`v0.5.0`)
+# LIGHT Feature Status (`v0.5.0` plus provider/model milestone)
 
 Status reflects source plus available evidence, not aspiration. Definitions are
 in [README.md](README.md). “CI” means the automated Windows/macOS matrix; it is
@@ -8,8 +8,9 @@ not physical-device certification.
 
 | Feature | Status | Evidence | Limits |
 | --- | --- | --- | --- |
-| `VoiceInputProvider` and factory | Implemented | `voice/`; `test_voice_provider.py` | one production provider plus unavailable fallback |
+| `VoiceInputProvider` and explicit factory | Implemented | `voice/`; provider tests | selected adapter only; no installed-provider auto-selection |
 | Handy SQLite ingestion | Partial | read-only provider tests; Windows smoke exists | requires external Handy; physical macOS path unverified |
+| custom transcript-feed API | Implemented | `test_provider_architecture.py` | consumes completed events; not an audio upload/microphone API |
 | ordered transcript polling | Implemented | `test_voice.py`; queue tests | polling, not push; default 150ms |
 | duplicate suppression | Implemented | voice/queue tests | one-second policy with repeatable-action exceptions |
 | unavailable-provider idle mode | Implemented | provider tests | no commands arrive until a provider exists |
@@ -25,7 +26,11 @@ not physical-device certification.
 | deterministic single/compound parsing | Implemented | parser and queue tests | grammar/vocabulary based |
 | contextual continuations | Implemented | `test_new_features.py` | relies on recorded site/search context |
 | casual/malformed speech rejection | Implemented | Laya/queue tests | heuristic and guarded classifier behavior |
-| local Qwen3 1.7B planning | Partial | mocked transport/normalization tests | live Ollama/model quality not part of default suite |
+| local Ollama and LM Studio planning | Partial | adapter/protocol and planner tests | live runtimes/model quality not part of default suite |
+| OpenAI, Claude, Gemini planning | Partial | mocked protocol/credential/error tests | no live account/API calls in default suite |
+| custom OpenAI-compatible planning | Partial | shared adapter tests | endpoint-specific compatibility must be validated by user |
+| independent provider/model selection | Implemented | configuration round-trip/registry tests | JSON/CLI configuration; no graphical settings UI |
+| endpoint model discovery | Partial | mocked provider API tests | depends on endpoint model-list support |
 | LLM action validation | Implemented | malformed/action tests | text targets still require downstream checks |
 | deterministic offline fallback | Implemented | queue/LLM tests | covers selected complex-search forms |
 | guarded Laya fallback | Implemented | `test_laya.py` | model dependency is loaded at normal startup |
@@ -63,7 +68,7 @@ not physical-device certification.
 
 | Feature | Status | Evidence | Limits |
 | --- | --- | --- | --- |
-| Browser Use with local Ollama | Experimental | initialization/adapter tests | optional dependencies; live agent not in default CI |
+| Browser Use with selected AI provider | Experimental | selection/adapter tests | optional dependencies; live external providers/agent not in default CI |
 | intent routing to `AGENT_TASK` | Implemented | parser tests | heuristic trigger phrases |
 | isolated Browser Use session | Implemented | ownership tests/source | two browsers may operate concurrently by design |
 | one atomic agent admission | Implemented | concurrency regression | one task at a time |
@@ -80,7 +85,8 @@ not physical-device certification.
 | single-instance cleanup | Partial | mocked tests, Windows smoke | stale/permission-constrained processes may resist termination |
 | Windows/macOS CI matrix | Implemented | GitHub Actions | no Linux job; host smoke disabled by default |
 | runtime performance logging | Implemented | queue request metrics | logs are ignored and not telemetry |
-| cloud LLM/analytics requirement | Not implemented | source/config | requested websites and package installs use network |
+| mandatory cloud LLM/analytics requirement | Not implemented | source/config | cloud AI is explicit opt-in; requested websites/package installs use network |
+| credential persistence | Environment reference only | redaction/config tests | OS keychain integration is not implemented |
 
 ## Planned, not current behavior
 

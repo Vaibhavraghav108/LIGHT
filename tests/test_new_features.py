@@ -7,9 +7,9 @@ from unittest.mock import MagicMock, patch
 
 from brain.commands import Action, Command
 from brain.decision import parse_deterministic_command, parse_multi_command
-from brain.laya import Laya
 from core.executor import Executor
 from core.state import LightState
+from tests.provider_test_utils import make_test_ai_provider, make_test_laya
 
 
 class TestNewFeatures(unittest.TestCase):
@@ -33,7 +33,7 @@ class TestNewFeatures(unittest.TestCase):
 
     def test_02_type_routes_to_desktop_when_browser_not_foreground(self):
         """2. When browser is NOT foreground (e.g. Notepad foreground), typing uses keyboard controller."""
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.screen = MagicMock()
         executor.browser = MagicMock()
         executor.keyboard = MagicMock()
@@ -52,7 +52,7 @@ class TestNewFeatures(unittest.TestCase):
 
     def test_03_type_routes_to_browser_when_browser_is_foreground(self):
         """3. When browser IS foreground, typing routes to browser controller."""
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.screen = MagicMock()
         executor.browser = MagicMock()
         executor.keyboard = MagicMock()
@@ -96,7 +96,7 @@ class TestNewFeatures(unittest.TestCase):
 
     def test_05_hotkey_execution(self):
         """5. Executor executes hotkeys via pyautogui.hotkey."""
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         with patch("pyautogui.hotkey") as mock_hotkey:
             cmd = Command(Action.HOTKEY, "ctrl+c")
             res = executor.execute(cmd)
@@ -126,7 +126,7 @@ class TestNewFeatures(unittest.TestCase):
 
     def test_07_window_control_execution(self):
         """7. Executor delegates window controls to screen controller."""
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.screen = MagicMock()
 
         # Switch window
@@ -180,7 +180,7 @@ class TestNewFeatures(unittest.TestCase):
 
     def test_09_media_dom_control_in_browser(self):
         """9. Media controls in browser use DOM evaluate without typing characters."""
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.screen = MagicMock()
         executor.browser = MagicMock()
         executor.keyboard = MagicMock()
@@ -232,7 +232,7 @@ class TestNewFeatures(unittest.TestCase):
 
         # And Laya.understand_many returns single Command(AGENT_TASK, ...)
         mock_agent = MagicMock()
-        laya_instance = Laya(agent=mock_agent)
+        laya_instance = make_test_laya(mock_agent)
         result_cmds = laya_instance.understand_many(q, state=self.state)
         self.assertEqual(len(result_cmds), 1)
         self.assertEqual(result_cmds[0].action, Action.AGENT_TASK)
@@ -240,7 +240,7 @@ class TestNewFeatures(unittest.TestCase):
 
     def test_12_stop_preemption_interrupts_wait_under_5ms(self):
         """12. Emergency STOP/Cancel interrupts WAIT within <5ms."""
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         cancel_event = threading.Event()
 
         # Trigger cancel_event after 10ms
@@ -262,7 +262,7 @@ class TestNewFeatures(unittest.TestCase):
         """13. Autonomous browser agent responds to cancellation."""
         from browser.agent import AutonomousBrowserAgent
 
-        agent = AutonomousBrowserAgent()
+        agent = AutonomousBrowserAgent(ai_provider=make_test_ai_provider())
         cancel_event = threading.Event()
         cancel_event.set()  # Already cancelled
 
@@ -296,11 +296,22 @@ class TestNewFeatures(unittest.TestCase):
         self.assertEqual(media_cmd.target, "10")
 
     def test_16_agent_task_initialization_logs_and_ollama(self):
-        """16. Autonomous browser agent initializes ChatOllama with configured Ollama model and endpoint."""
+        """16. Autonomous browser agent initializes the explicitly injected Ollama provider."""
         from browser.agent import AutonomousBrowserAgent
-        from config import LLM_BASE_URL, LLM_MODEL
+        from providers.ai import OllamaAIProvider
+        from providers.configuration import AIConfig
 
-        agent = AutonomousBrowserAgent()
+        model = "qwen3:1.7b"
+        endpoint = "http://127.0.0.1:11434"
+        provider = OllamaAIProvider(
+            AIConfig(
+                provider="local",
+                runtime="ollama",
+                model=model,
+                base_url=endpoint,
+            )
+        )
+        agent = AutonomousBrowserAgent(ai_provider=provider)
         with patch("browser_use.llm.ChatOllama") as mock_chat_ollama, \
              patch("browser.agent.log_info") as mock_log_info:
             mock_chat_ollama.return_value = MagicMock()
@@ -308,19 +319,19 @@ class TestNewFeatures(unittest.TestCase):
             self.assertIsNotNone(llm)
             mock_chat_ollama.assert_called_once()
             _, kwargs = mock_chat_ollama.call_args
-            self.assertEqual(kwargs.get("model"), LLM_MODEL)
-            self.assertEqual(kwargs.get("host"), LLM_BASE_URL)
+            self.assertEqual(kwargs.get("model"), model)
+            self.assertEqual(kwargs.get("host"), endpoint)
 
             # Check logging calls
             logged_messages = [call.args[0] for call in mock_log_info.call_args_list]
             self.assertTrue(any("LLM provider: Ollama" in msg for msg in logged_messages))
-            self.assertTrue(any(f"LLM model: {LLM_MODEL}" in msg for msg in logged_messages))
-            self.assertTrue(any(f"LLM endpoint: {LLM_BASE_URL}" in msg for msg in logged_messages))
+            self.assertTrue(any(f"LLM model: {model}" in msg for msg in logged_messages))
+            self.assertTrue(any(f"LLM endpoint: {endpoint}" in msg for msg in logged_messages))
             self.assertTrue(any("Browser Use initialized" in msg for msg in logged_messages))
 
     def test_17_agent_task_failure_restores_state_and_records_error(self):
         """17. AGENT_TASK failure restores state and does not leave agent_running active."""
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         mock_browser_agent = MagicMock()
         mock_browser_agent.run_task.return_value = {
             "success": False,
@@ -339,7 +350,7 @@ class TestNewFeatures(unittest.TestCase):
 
     def test_18_agent_task_cancelled_reports_cancelled(self):
         """18. AGENT_TASK cancellation returns CANCELLED and resets agent_running state."""
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         mock_browser_agent = MagicMock()
         mock_browser_agent.run_task.return_value = {
             "success": False,
@@ -365,7 +376,7 @@ class TestNewFeatures(unittest.TestCase):
         import asyncio
         from browser.agent import AutonomousBrowserAgent
 
-        agent = AutonomousBrowserAgent()
+        agent = AutonomousBrowserAgent(ai_provider=make_test_ai_provider())
 
         async def run_in_loop():
             # In an active event loop, execute_task should be an async coroutine
@@ -394,7 +405,7 @@ class TestNewFeatures(unittest.TestCase):
         import asyncio
         from browser.agent import AutonomousBrowserAgent
 
-        agent = AutonomousBrowserAgent()
+        agent = AutonomousBrowserAgent(ai_provider=make_test_ai_provider())
 
         async def caller():
             # Calling synchronous run_task from inside an active event loop
@@ -470,7 +481,7 @@ class TestNewFeatures(unittest.TestCase):
 
     def test_24_issue3_named_target_passes_search_context(self):
         """Issue 3: Executor forwards search context when opening a named search target."""
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         self.state.last_search_query = "LangGraph"
 
@@ -520,7 +531,7 @@ class TestNewFeatures(unittest.TestCase):
 
     def test_27_issue5_find_element_failure_raises_and_never_reports_ok(self):
         """Issue 5: When an element is not found, executor raises error and does not report OK."""
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         executor.browser.find_element.return_value = False
 
@@ -531,7 +542,7 @@ class TestNewFeatures(unittest.TestCase):
 
     def test_28_issue5_click_failure_never_reports_ok(self):
         """Issue 5: When click fails verification or target is missing, executor raises error."""
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         executor.browser.click_element.side_effect = ValueError("Could not find a visible element matching 'missing'")
 
@@ -568,7 +579,7 @@ class TestNewFeatures(unittest.TestCase):
 
     def test_30_executor_normalizes_click_element_ordinals(self):
         """Issue 1: Executor normalizes any CLICK_ELEMENT ordinal targets."""
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
 
         # In search context: CLICK_ELEMENT("First Element") forwards to click_result
@@ -621,7 +632,7 @@ class TestNewFeatures(unittest.TestCase):
             validate_llm_action("open link", {"action": "OPEN_URL", "target": "official repository"})
 
         # Test _call_ollama strips /no_think
-        planner = QwenPlanner(enabled=True)
+        planner = QwenPlanner(enabled=True, ai_provider=make_test_ai_provider())
         raw_json_str = '{"actions": [{"action": "OPEN_URL", "target": "https://github.com"}]}'
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_resp = MagicMock()
@@ -642,7 +653,7 @@ class TestNewFeatures(unittest.TestCase):
         agent_cmd = Command(Action.AGENT_TASK, "research three Python frameworks and compare them")
         mock_laya.understand.return_value = agent_cmd
         mock_laya.understand_many.return_value = [agent_cmd]
-        mock_executor = Executor(state=self.state)
+        mock_executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         mock_agent = MagicMock()
 
         async def fake_execute_task(task_prompt="", max_steps=5, cancel_event=None, task_instruction=""):
@@ -664,7 +675,7 @@ class TestNewFeatures(unittest.TestCase):
         import asyncio
         from browser.agent import AutonomousBrowserAgent
 
-        agent = AutonomousBrowserAgent()
+        agent = AutonomousBrowserAgent(ai_provider=make_test_ai_provider())
 
         async def fake_execute_task(task_prompt="", max_steps=5, cancel_event=None, task_instruction=""):
             return "AGENT_COMPLETED: Done"
@@ -685,7 +696,7 @@ class TestNewFeatures(unittest.TestCase):
         import asyncio
         from browser.agent import AutonomousBrowserAgent
 
-        agent = AutonomousBrowserAgent()
+        agent = AutonomousBrowserAgent(ai_provider=make_test_ai_provider())
         cancel_evt = threading.Event()
         cancel_evt.set()  # Cancelled beforehand
 
@@ -711,7 +722,7 @@ class TestNewFeatures(unittest.TestCase):
         self.assertEqual(cmds[2].target, "official repository")
 
         # Execute with executor and mock browser
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         executor.browser.is_active.return_value = True
 
@@ -736,7 +747,7 @@ class TestNewFeatures(unittest.TestCase):
         self.assertEqual(cmd.action, Action.CLICK_RESULT)
         self.assertEqual(cmd.target, "official repository")
 
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         executor.browser.is_active.return_value = True
 
@@ -872,7 +883,7 @@ class TestNewFeatures(unittest.TestCase):
 
         self.assertEqual(self.state.get_browser_ownership(), BrowserOwnership.NONE.value)
 
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         executor.browser.is_active.return_value = True
 
@@ -907,7 +918,7 @@ class TestNewFeatures(unittest.TestCase):
         self.state.set_browser_ownership(BrowserOwnership.AGENT)
         self.state.agent_running = True
 
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.apps = MagicMock()
         executor.screen = MagicMock()
         executor.screen.get_foreground_window_info.return_value = {"title": "Notepad", "process_name": "notepad.exe"}
@@ -931,7 +942,7 @@ class TestNewFeatures(unittest.TestCase):
 
         self.state.set_browser_ownership(BrowserOwnership.AGENT)
         self.state.agent_running = True
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         executor.browser.is_active.return_value = True
 
@@ -947,7 +958,7 @@ class TestNewFeatures(unittest.TestCase):
         self.state.set_browser_ownership(BrowserOwnership.AGENT)
         self.state.agent_running = True
 
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         mock_agent = MagicMock()
         executor.browser_agent = mock_agent
         executor.browser = MagicMock()
@@ -967,7 +978,7 @@ class TestNewFeatures(unittest.TestCase):
         self.state.current_site = "github"
         self.state.browser_open = True
 
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser = MagicMock()
         result = executor.execute(Command(Action.STOP, None), raw_text="Stop")
 
@@ -1021,7 +1032,7 @@ class TestNewFeatures(unittest.TestCase):
 
         mock_agent.run_task.side_effect = slow_agent
 
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser_agent = mock_agent
 
         mock_handy = MagicMock()
@@ -1060,7 +1071,7 @@ class TestNewFeatures(unittest.TestCase):
 
         mock_agent.run_task.side_effect = slow_agent
 
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser_agent = mock_agent
         executor.apps = MagicMock()
         executor.screen = MagicMock()
@@ -1109,7 +1120,7 @@ class TestNewFeatures(unittest.TestCase):
 
         mock_agent.run_task.side_effect = slow_agent
 
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser_agent = mock_agent
         executor.browser = MagicMock()
         executor.browser.is_active.return_value = True
@@ -1173,7 +1184,7 @@ class TestNewFeatures(unittest.TestCase):
 
         mock_agent.run_task.side_effect = slow_agent
 
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser_agent = mock_agent
         executor.browser = MagicMock()
 
@@ -1214,7 +1225,7 @@ class TestNewFeatures(unittest.TestCase):
 
         mock_agent.run_task.side_effect = slow_agent
 
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser_agent = mock_agent
 
         mock_handy = MagicMock()
@@ -1263,7 +1274,7 @@ class TestNewFeatures(unittest.TestCase):
             return {"success": True, "cancelled": False, "final_result": "Done"}
 
         mock_agent.run_task.side_effect = slow_agent
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser_agent = mock_agent
         counting_lock = CountingLock()
         executor._agent_lock = counting_lock
@@ -1280,7 +1291,7 @@ class TestNewFeatures(unittest.TestCase):
         """F. Successful agent completion restores correct state and ownership."""
         from core.state import BrowserOwnership
 
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         mock_agent = MagicMock()
         mock_agent.run_task.return_value = {
             "success": True,
@@ -1304,7 +1315,7 @@ class TestNewFeatures(unittest.TestCase):
         """G. Agent failure restores correct state and records failure."""
         from core.state import BrowserOwnership
 
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         mock_agent = MagicMock()
         mock_agent.run_task.return_value = {
             "success": False,
@@ -1336,7 +1347,7 @@ class TestNewFeatures(unittest.TestCase):
 
         mock_agent.run_task.side_effect = slow_agent
 
-        executor = Executor(state=self.state)
+        executor = Executor(state=self.state, ai_provider=make_test_ai_provider())
         executor.browser_agent = mock_agent
         executor.browser = MagicMock()
 
@@ -1362,7 +1373,7 @@ class TestNewFeatures(unittest.TestCase):
         from browser.agent import AutonomousBrowserAgent
 
         with patch.dict(os.environ, {}, clear=True):
-            AutonomousBrowserAgent()
+            AutonomousBrowserAgent(ai_provider=make_test_ai_provider())
             self.assertEqual(os.environ["ANONYMIZED_TELEMETRY"], "false")
             self.assertEqual(os.environ["BROWSER_USE_CLOUD_SYNC"], "false")
             self.assertTrue(os.environ["BROWSER_USE_CONFIG_DIR"].endswith(".light_browseruse"))

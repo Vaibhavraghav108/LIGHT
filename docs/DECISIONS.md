@@ -1,9 +1,11 @@
 # LIGHT — Architecture Decision Records (ADRs)
 
 This file preserves the rationale, trade-offs, and consequences of critical
-technical decisions. **Active** decisions govern `v0.5.0`; **Historical**
+technical decisions. **Active** decisions govern current source; **Historical**
 decisions explain earlier behavior but no longer govern it; **Superseded**
-decisions identify their replacement. No ADR is currently superseded.
+decisions identify their replacement. ADR-015 is an unreleased feature-branch
+decision; it is not part of the `v0.5.0` tag. ADR-002 is superseded for provider
+selection but retained as the default local configuration.
 
 ---
 
@@ -13,7 +15,7 @@ decisions identify their replacement. No ADR is currently superseded.
 Active
 
 ## Decision
-Route high-frequency, structured voice commands through deterministic regex and grammatical parsers (`brain/decision.py`) as the primary execution path, reserving the local Large Language Model (Qwen3 1.7B) exclusively for complex, multi-clause natural language search and browsing tasks.
+Route high-frequency, structured voice commands through deterministic regex and grammatical parsers (`brain/decision.py`) as the primary execution path, reserving the selected AI provider/model for complex, multi-clause natural language search and browsing tasks. Local Ollama/Qwen3 remains the default.
 
 ## Reason
 1. **Latency**: Deterministic parsing completes in **<1ms**, compared to 300ms–2000ms for local LLM token generation. For common navigation (`"open youtube"`, `"scroll down"`, `"press enter"`), sub-millisecond execution is essential for an ambient voice experience.
@@ -32,7 +34,8 @@ Route high-frequency, structured voice commands through deterministic regex and 
 # ADR-002 — Local Qwen3 1.7B via Ollama for Complex Planning
 
 ## Status
-Active
+Superseded by ADR-015 for provider selection; retained as the default local
+configuration.
 
 ## Decision
 Standardize the natural language planning model on local **Qwen3 1.7B** served via Ollama (`http://127.0.0.1:11434`), explicitly avoiding remote cloud LLMs (OpenAI, Anthropic) for core planning.
@@ -318,3 +321,59 @@ surprising network/configuration side effect merely because it is imported.
 
 ## Related Components
 - `config.py`, `browser/agent.py`, `.gitignore`
+
+---
+
+# ADR-015 — Explicit Provider and Model Selection
+
+## Status
+Active
+
+## Decision
+Represent STT and AI configuration as separate typed sections. Provider,
+runtime, and model are independent values. Construct only the selected adapter
+from an allowlisted registry; never inspect installed software to auto-select a
+provider and never fail over silently to another provider/model.
+
+Keep local Handy and Ollama/Qwen3 as defaults. Support local LM Studio and
+explicit OpenAI, Claude, Gemini, and custom OpenAI-compatible AI endpoints.
+Reuse the selected AI provider for both planner and Browser Use. STT remains a
+completed-transcript boundary: local Handy and a documented custom transcript
+feed are supported, while direct microphone/Whisper stays unimplemented until
+LIGHT has an audio-source contract.
+
+Store user selection in ignored `.light/providers.json`. Persist only a
+credential environment-variable name, validate CLI candidates before atomic
+activation, and sanitize provider errors. Continue accepting legacy `LLM_*`
+and `HANDY_DB_PATH` defaults for existing installations.
+
+Provider defaults are selection-aware: Ollama runtime, model, and endpoint
+defaults apply only to local Ollama. Activation requires a non-empty model
+inventory containing the selected model and any explicitly configured
+credential environment variable.
+
+## Reason
+Provider identity and model identity change independently. Hardcoding Ollama
+in planning and autonomous-agent code prevented model/runtime choice and
+duplicated transport concerns. A small boundary adds choice without moving any
+common command onto an LLM path or changing the trusted action vocabulary.
+
+The existing voice boundary consumes transcript events, not audio. Treating a
+Whisper package or generic transcription endpoint as operational without
+capture, VAD, framing, and lifecycle ownership would fabricate support and risk
+continuous-listening regressions.
+
+## Consequences
+- **Positive**: Users can select and validate providers/models without editing
+  source; planning and Browser Use share one selection; local-first operation
+  and legacy configuration remain available.
+- **Positive**: No mandatory cloud SDK is added to planner execution; HTTP
+  adapters use the standard library.
+- **Negative**: Cloud providers change the privacy/cost boundary and are not
+  live-tested by the default suite.
+- **Negative**: Credentials currently use environment variables rather than an
+  OS keychain, and direct local Whisper still requires a future audio pipeline.
+
+## Related Components
+- `providers/`, `brain/llm.py`, `browser/agent.py`, `voice/factory.py`,
+  `voice/custom_api_provider.py`, `main.py`, `.gitignore`
