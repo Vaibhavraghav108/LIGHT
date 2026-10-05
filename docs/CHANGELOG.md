@@ -17,8 +17,10 @@
 - A documented custom transcript-feed `VoiceInputProvider` while preserving
   Handy as the default local runtime.
 - Provider architecture, configuration, credential, redaction, no-fallback,
-  planner, and Browser Use regression tests (30 provider tests plus one
-  inaccessible-Handy-path regression).
+  planner, and Browser Use regression tests (36 provider regression tests plus
+  one inaccessible-Handy-path regression). The current full-suite baseline is
+  192 discovered, 184 passing, 8 opt-in host smoke tests skipped, 0 failures,
+  and 0 errors.
 
 ### Changed
 - `QwenPlanner` remains backward-compatible but delegates every production
