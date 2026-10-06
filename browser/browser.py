@@ -14,6 +14,7 @@ from config import (
     get_brave_candidate_paths,
 )
 from utils.logger import log_browser, log_debug, log_warning
+from core.metrics import InferenceMetrics
 
 
 RESULT_ORDINAL_MAP = {
@@ -81,6 +82,7 @@ class BrowserController:
         self.active_executable_path: str | None = None
         self._skip_persistent_context: bool = False
         self.last_search_query: str | None = None
+        self.metrics = InferenceMetrics()
 
     # ==========================================
     # FIND BROWSER & FALLBACK CANDIDATES
@@ -424,6 +426,12 @@ class BrowserController:
     def start(self):
         if self.is_active():
             return
+
+        with self.metrics.measure("browser_startup") as outcome:
+            self._start_session()
+            outcome["value"] = "success"
+
+    def _start_session(self):
 
         if self.browser is not None or self.context is not None or self.playwright is not None:
             self.close()

@@ -12,6 +12,8 @@ from computer.mouse import MouseController
 from computer.screen import ScreenController
 from config import DEFAULT_WAIT_SECONDS
 from core.state import LightState, BrowserOwnership
+from core.tasks import TaskStatus
+from core.queue_manager import CommandStatus
 from utils.logger import log_executor
 
 class Executor:
@@ -30,6 +32,10 @@ class Executor:
         self._agent_lock = threading.Lock()
         self.last_agent_result: str | None = None
         self.last_agent_error: str | None = None
+        self._closing = threading.Event()
+        self._agent_cancel_event = None
+        self.verification_started_at = 0.0
+        self.verification_completed_at = 0.0
 
     def _sleep_interruptible(self, seconds: float, cancel_event=None):
         """
@@ -47,7 +53,7 @@ class Executor:
             self.last_stop_interrupt_ms = round((time.perf_counter() - t0) * 1000.0, 2)
             log_executor(f"WAIT interrupted by STOP/Cancel after {self.last_stop_interrupt_ms}ms.")
 
-    def _verify_and_recover(self, command: Command):
+    def _verify_and_recover(self, command: Command, cancel_event=None):
         """
         Lightweight OBSERVE -> ACT -> VERIFY -> RECOVER checks for browser operations.
         Never adds heavy artificial delays.
@@ -64,12 +70,22 @@ class Executor:
                 Action.GO_FORWARD,
                 Action.REFRESH,
             }:
+                self.verification_started_at = v_start
+                if cancel_event is not None and cancel_event.is_set():
+                    return
                 if not self.browser.is_active():
                     # Recover if browser session dropped unexpectedly
+                    if cancel_event is not None and cancel_event.is_set():
+                        return
                     self.browser.start()
+                if cancel_event is not None and cancel_event.is_set():
+                    return
                 current_url = self.browser.get_current_url()
                 if action == Action.OPEN_URL and not current_url and command.target:
+                    if cancel_event is not None and cancel_event.is_set():
+                        return
                     self.browser.open_url(command.target)
+                self.verification_completed_at = time.perf_counter()
         finally:
             self.last_verification_ms = round((time.perf_counter() - v_start) * 1000.0, 2)
 
@@ -78,9 +94,16 @@ class Executor:
         command: Command,
         raw_text: str | None = None,
         cancel_event=None,
+        request=None,
     ) -> str:
         action = command.action
         target = command.target
+        self.last_verification_ms = 0.0
+        self.verification_started_at = 0.0
+        self.verification_completed_at = 0.0
+        if action != Action.STOP and (self._closing.is_set() or
+                                      (cancel_event is not None and cancel_event.is_set())):
+            return "CANCELLED"
 
         # ==========================================
         # APPLICATIONS
@@ -390,15 +413,15 @@ class Executor:
 
         elif action == Action.AGENT_TASK:
             if cancel_event is not None and cancel_event.is_set():
-                with self.state._lock:
-                    self.state.agent_running = False
                 log_executor("Agent task cancelled before start: CANCELLED")
                 return "CANCELLED"
+
+            agent_cancel_event = cancel_event if cancel_event is not None else self._closing
 
             def _agent_worker():
                 try:
                     log_executor(f"[AGENT_TASK] Background worker started for: '{target}'")
-                    res = self.browser_agent.run_task(task_instruction=target, cancel_event=cancel_event)
+                    res = self.browser_agent.run_task(task_instruction=target, cancel_event=agent_cancel_event)
                     final_res = res.get("final_result", "") if isinstance(res, dict) else str(res)
                     is_cancelled = res.get("cancelled", False) if isinstance(res, dict) else (final_res == "CANCELLED")
                     is_success = (
@@ -406,6 +429,7 @@ class Executor:
                         if isinstance(res, dict)
                         else (final_res.startswith("AGENT_COMPLETED") if isinstance(final_res, str) else False)
                     )
+                    is_cancelled = is_cancelled or agent_cancel_event.is_set()
 
                     if is_cancelled:
                         self.last_agent_result = "CANCELLED"
@@ -423,6 +447,21 @@ class Executor:
                     self.last_agent_error = str(err)
                     log_executor(f"Agent task unhandled error: {err}")
                 finally:
+                    if request is not None:
+                        request.execution_completed_at = time.perf_counter()
+                        if request.task:
+                            request.task.mark("execution_finished", request.execution_completed_at)
+                            request.task.mark("agent_terminated", request.execution_completed_at)
+                        if agent_cancel_event.is_set() or self.last_agent_result == "CANCELLED":
+                            request.cancel("Agent cancelled")
+                        elif self.last_agent_result == "COMPLETED":
+                            request.status = CommandStatus.COMPLETED
+                            if request.task:
+                                request.task.finish_step()  # agent-reported, not independently verified
+                        else:
+                            request.status = CommandStatus.FAILED
+                            if request.task:
+                                request.task.fail(TaskStatus.FAILED, "Agent execution failed")
                     with self.state._lock:
                         self.state.agent_running = False
                         try:
@@ -431,7 +470,7 @@ class Executor:
                             )
                         except Exception:
                             browser_active = False
-                        if browser_active:
+                        if browser_active and not self._closing.is_set():
                             self.state.set_browser_ownership(BrowserOwnership.LIGHT)
                         else:
                             self.state.set_browser_ownership(BrowserOwnership.NONE)
@@ -452,6 +491,7 @@ class Executor:
                     self.state.set_browser_ownership(BrowserOwnership.AGENT)
                 self.last_agent_result = None
                 self.last_agent_error = None
+                self._agent_cancel_event = agent_cancel_event
                 self._agent_thread = worker_thread
                 worker_thread.start()
             self.state.record_command(raw_text, command)
@@ -465,6 +505,8 @@ class Executor:
             seconds = float(target) if target else DEFAULT_WAIT_SECONDS
             log_executor(f"Waiting {seconds} seconds...")
             self._sleep_interruptible(seconds, cancel_event=cancel_event)
+            if cancel_event is not None and cancel_event.is_set():
+                return "CANCELLED"
             self.state.record_command(raw_text, command)
             return "OK"
 
@@ -473,6 +515,9 @@ class Executor:
         # ==========================================
 
         elif action == Action.STOP:
+            self._closing.set()
+            if self._agent_cancel_event is not None:
+                self._agent_cancel_event.set()
             if hasattr(self, "browser_agent") and self.browser_agent:
                 try:
                     if hasattr(self.browser_agent, "cancel"):
@@ -484,8 +529,9 @@ class Executor:
             if worker and worker.is_alive() and worker is not threading.current_thread():
                 worker.join(timeout=0.2)
             with self.state._lock:
-                self.state.agent_running = False
-                self.state.set_browser_ownership(BrowserOwnership.NONE)
+                self.state.agent_running = bool(worker and worker.is_alive())
+                self.state.set_browser_ownership(
+                    BrowserOwnership.AGENT if self.state.agent_running else BrowserOwnership.NONE)
             self.browser.close()
             self.state.record_command(raw_text, command)
             return "STOP"
@@ -494,7 +540,11 @@ class Executor:
             raise ValueError(f"Unsupported action: {action}")
 
         # Lightweight post-action verification
-        self._verify_and_recover(command)
+        if cancel_event is not None and cancel_event.is_set():
+            return "CANCELLED"
+        self._verify_and_recover(command, cancel_event=cancel_event)
+        if cancel_event is not None and cancel_event.is_set():
+            return "CANCELLED"
 
         # Update short-term context and observation state
         self.state.record_command(raw_text, command)
@@ -515,7 +565,10 @@ class Executor:
         return True
 
     def close(self, timeout: float = 0.5):
-        """Clean up executor resources and ensure background agent worker is cancelled and joined."""
+        """Request cleanup; return False for a surviving agent or failed browser close."""
+        self._closing.set()
+        if self._agent_cancel_event is not None:
+            self._agent_cancel_event.set()
         if hasattr(self, "browser_agent") and self.browser_agent:
             try:
                 if hasattr(self.browser_agent, "cancel"):
@@ -527,23 +580,27 @@ class Executor:
         if worker and worker.is_alive() and worker is not threading.current_thread():
             worker.join(timeout=timeout)
         with self.state._lock:
-            self.state.agent_running = False
-            self.state.set_browser_ownership(BrowserOwnership.NONE)
+            self.state.agent_running = bool(worker and worker.is_alive())
+            self.state.set_browser_ownership(
+                BrowserOwnership.AGENT if self.state.agent_running else BrowserOwnership.NONE)
+        browser_closed = True
         try:
             self.browser.close()
         except Exception:
-            pass
+            browser_closed = False
+        return browser_closed and not bool(worker and worker.is_alive())
 
     async def execute_async(
         self,
         command: Command,
         raw_text: str | None = None,
         cancel_event=None,
+        request=None,
     ) -> str:
         """
         Asynchronous executor entry point compatible with an active asyncio event loop.
         Dispatches to execute() which handles background worker threads, desktop controls,
         and browser operations safely.
         """
-        return self.execute(command, raw_text=raw_text, cancel_event=cancel_event)
+        return self.execute(command, raw_text=raw_text, cancel_event=cancel_event, request=request)
 

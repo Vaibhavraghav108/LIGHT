@@ -4,6 +4,41 @@
 
 ---
 
+## [Unreleased working branch] — Phase 0/1 planning safety foundation
+
+Implemented on `codex/planning-safety-foundation` from merged main `777c7d9`;
+not yet committed/merged or validated by hosted CI.
+
+### Added
+- One bounded `LIGHT-PlanningWorker` with FIFO reservations, task identity,
+  cancellation generations, and stale-result rejection before dispatch.
+- Bounded in-memory transcript-free task/status and inference/startup timing
+  evidence. Missing publication/visible-effect measurements remain unavailable.
+- 33 event-controlled regressions; 20 repeated runs passed 660 executions with
+  no surviving LIGHT workers. Current Windows suite:
+  **225 discovered, 217 passed, 8 opt-in host smoke skips,
+  0 failures/errors**. Compileall and diff checks pass.
+
+### Fixed
+- Semantic inference no longer blocks transcript ingestion of a later STOP.
+- Failed dependency isolation now uses task IDs for loop-created plans rather
+  than repeated utterance text. Async dequeue cancellation preserves accounting.
+- Agent dispatch is not completion; timed-out joins preserve running ownership
+  until cleanup exits. Browser Use constructor failures close created browsers.
+- Executor cleanup failures/incomplete joins are surfaced in loop shutdown
+  status instead of being reported as successful cleanup.
+- Cancellation suppresses subsequent browser verification recovery.
+
+### Boundaries
+- Deterministic parsing, selected providers/models, executor action vocabulary,
+  isolated AgentWorker, Handy, and platform abstraction remain intact.
+- Cold local-model inference exceeded the existing 8s timeout; three subsequent
+  resident-model requests produced valid plans in 4.94–5.40s. No model/timeout or
+  fallback policy was changed. Third-party cancellation and physical host checks
+  remain limitations; the existing dependency metadata conflict is unchanged.
+- No Phase 2 capability catalog, typed conversational memory, vision, raw-audio
+  STT, Excel, GUI, new dependency/provider, or CI redesign is included.
+
 ## [Unreleased] — Provider and model architecture
 
 ### Added
@@ -18,7 +53,7 @@
   Handy as the default local runtime.
 - Provider architecture, configuration, credential, redaction, no-fallback,
   planner, and Browser Use regression tests (36 provider regression tests plus
-  one inaccessible-Handy-path regression). The current full-suite baseline is
+  one inaccessible-Handy-path regression). That milestone's full-suite baseline was
   192 discovered, 184 passing, 8 opt-in host smoke tests skipped, 0 failures,
   and 0 errors.
 

@@ -32,14 +32,13 @@ class AutonomousBrowserAgent:
             return self._running
 
     def cancel(self):
-        """Cancel the running browser agent immediately."""
+        """Request cancellation; running remains truthful until cleanup finishes."""
         with self._lock:
             if self._current_agent and hasattr(self._current_agent, "stop"):
                 try:
                     self._current_agent.stop()
                 except Exception:
                     pass
-            self._running = False
 
     def run_task(self, task_instruction: str, max_steps: int = 5, cancel_event=None) -> dict:
         """
@@ -129,7 +128,7 @@ class AutonomousBrowserAgent:
         """
         Execute an autonomous browser agent task with Browser Use asynchronously.
         Compatible with LIGHT's active event loop.
-        Monitors cancel_event (<5ms STOP responsiveness) and aborts immediately when set.
+        Monitors cancellation every 10ms; third-party termination remains cooperative.
         """
         effective_prompt = (task_prompt or task_instruction or "").strip()
         if cancel_event is not None and cancel_event.is_set():
@@ -153,38 +152,44 @@ class AutonomousBrowserAgent:
             log_warning(f"[AGENT_TASK] Initialization failed: {err}")
             return f"AGENT_INIT_FAILED: {err}"
 
+        if cancel_event is not None and cancel_event.is_set():
+            return "CANCELLED"
         with self._lock:
             self._running = True
 
-        browser = Browser(headless=True)
-        agent = Agent(
-            task=task_prompt,
-            llm=llm,
-            use_vision=False,
-            flash_mode=True,
-            browser=browser,
-            llm_timeout=180,
-        )
-        with self._lock:
-            self._current_agent = agent
-
-        agent_task = asyncio.create_task(agent.run(max_steps=max_steps))
-
-        async def _poll_cancel():
-            while not agent_task.done():
-                if cancel_event is not None and cancel_event.is_set():
-                    log_browser("[AGENT_TASK] STOP detected during agent execution! Aborting agent...")
-                    try:
-                        if hasattr(agent, "stop"):
-                            agent.stop()
-                    except Exception:
-                        pass
-                    agent_task.cancel()
-                    break
-                await asyncio.sleep(0.01)
-
-        cancel_poller = asyncio.create_task(_poll_cancel())
+        browser = None
+        cancel_poller = None
         try:
+            browser = Browser(headless=True)
+            agent = Agent(
+                task=task_prompt,
+                llm=llm,
+                use_vision=False,
+                flash_mode=True,
+                browser=browser,
+                llm_timeout=180,
+            )
+            if cancel_event is not None and cancel_event.is_set():
+                return "CANCELLED"
+            with self._lock:
+                self._current_agent = agent
+
+            agent_task = asyncio.create_task(agent.run(max_steps=max_steps))
+
+            async def _poll_cancel():
+                while not agent_task.done():
+                    if cancel_event is not None and cancel_event.is_set():
+                        log_browser("[AGENT_TASK] STOP detected during agent execution! Aborting agent...")
+                        try:
+                            if hasattr(agent, "stop"):
+                                agent.stop()
+                        except Exception:
+                            pass
+                        agent_task.cancel()
+                        break
+                    await asyncio.sleep(0.01)
+
+            cancel_poller = asyncio.create_task(_poll_cancel())
             history = await agent_task
             cancel_poller.cancel()
 
@@ -212,11 +217,18 @@ class AutonomousBrowserAgent:
             log_warning(f"[AGENT_TASK] Error during agent execution: {err}")
             return f"ERROR: {err}"
         finally:
-            cancel_poller.cancel()
-            with self._lock:
-                self._current_agent = None
-                self._running = False
+            if cancel_poller is not None:
+                cancel_poller.cancel()
+                try:
+                    await cancel_poller
+                except asyncio.CancelledError:
+                    pass
             try:
-                await browser.close()
+                if browser is not None:
+                    await browser.close()
             except Exception:
                 pass
+            finally:
+                with self._lock:
+                    self._current_agent = None
+                    self._running = False

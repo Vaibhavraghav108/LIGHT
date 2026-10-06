@@ -1365,9 +1365,17 @@ class TestNewFeatures(unittest.TestCase):
         # Shutdown must be bounded (e.g. <500ms) and not hang indefinitely
         self.assertLess(shutdown_ms, 500.0)
         mock_agent.cancel.assert_called_once()
+        # This fixture deliberately ignores cancellation until released. A timed-out
+        # join must not pretend its browser ownership has already been relinquished.
+        try:
+            self.assertTrue(self.state.agent_running)
+            self.assertEqual(self.state.get_browser_ownership(), BrowserOwnership.AGENT.value)
+            self.assertFalse(executor.join_agent(timeout=0.0))
+        finally:
+            agent_block.set()
+            self.assertTrue(executor.join_agent(timeout=1.0))
         self.assertFalse(self.state.agent_running)
         self.assertEqual(self.state.get_browser_ownership(), BrowserOwnership.NONE.value)
-        agent_block.set()
 
     def test_53_browser_agent_defaults_are_local_and_private(self):
         from browser.agent import AutonomousBrowserAgent

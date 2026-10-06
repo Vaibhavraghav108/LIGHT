@@ -24,6 +24,7 @@ from config import (
 from providers.ai import AIProvider, ProviderRequestError, build_ai_provider
 from providers.configuration import AIConfig, ProviderConfigurationError, load_provider_settings
 from utils.logger import log_debug, log_llm, log_warning
+from core.metrics import InferenceMetrics
 
 ALLOWED_LLM_ACTIONS = {action.name: action for action in Action}
 
@@ -237,6 +238,7 @@ class QwenPlanner:
             self.ai_provider = build_ai_provider(provider_config)
         self._unavailable_until = 0.0
         self.last_latency_ms: float | None = None
+        self.metrics = InferenceMetrics()
 
     def _build_prompt(self, text: str, state=None) -> str:
         site = getattr(state, "current_site", None) or "none"
@@ -331,7 +333,9 @@ class QwenPlanner:
 
         start_ts = time.perf_counter()
         try:
-            response_data = self._call_configured_provider(self._build_prompt(text, state=state))
+            with self.metrics.measure("provider_completion") as outcome:
+                response_data = self._call_configured_provider(self._build_prompt(text, state=state))
+                outcome["value"] = "success"
             latency_ms = round((time.perf_counter() - start_ts) * 1000.0, 1)
             self.last_latency_ms = latency_ms
             log_llm(

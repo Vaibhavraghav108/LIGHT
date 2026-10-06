@@ -18,6 +18,9 @@ not physical-device certification.
 | priority queue and plan-scoped pruning | Implemented | `test_queue_and_llm.py` | consumer still executes ordinary commands sequentially |
 | ingestion-time STOP priority | Implemented | queue/new-feature timing tests | sub-5ms boundary excludes STT/polling; running calls vary |
 | thread-safe contextual state | Implemented | state/ownership tests | observation can become stale between checks |
+| non-blocking ordered interpretation | Implemented on working branch | `test_planning_foundation.py` | one worker; 64 pending plans plus one in flight; later commands cannot overtake |
+| cancellation generations/task identity | Implemented on working branch | stale-plan and concurrent-ingestion tests | in-flight third-party calls remain cooperative/timeout-bound |
+| truthful bounded task/latency diagnostics | Implemented on working branch | status/metrics regressions | debug API, not GUI; missing publication/visible-effect evidence remains unavailable |
 
 ## Brain and planning
 
@@ -74,7 +77,7 @@ not physical-device certification.
 | one atomic agent admission | Implemented | concurrency regression | one task at a time |
 | non-blocking `LIGHT-AgentWorker` | Implemented | sync/async consumer tests | daemon may outlive bounded join if dependency hangs |
 | cooperative STOP/cancellation | Partial | mocked async/worker tests | Browser Use internals may not stop immediately |
-| agent result notification UI | Not implemented | logs/state only | no dedicated completion surface |
+| agent result notification UI | Not implemented | logs/state and working-branch task snapshots | no dedicated completion surface; reported success is not independent goal verification |
 
 ## Reliability, privacy, and delivery
 

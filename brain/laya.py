@@ -13,6 +13,7 @@ from brain.decision import (
 from brain.llm import QwenPlanner
 from config import LAYA_MODEL
 from utils.logger import log_laya
+from core.metrics import InferenceMetrics
 
 
 class Laya:
@@ -52,6 +53,18 @@ class Laya:
                 ],
             }
         }
+        self.metrics = InferenceMetrics()
+
+    def understand_deterministic(self, text: str, state=None) -> list[Command] | None:
+        """Pure fast-path boundary: never invokes an AI provider or classifier."""
+        cleaned = preprocess_text(text)
+        if not cleaned:
+            raise ValueError("Empty command")
+        multi_cmds = parse_multi_command(text, state=state)
+        if multi_cmds:
+            return multi_cmds
+        command = parse_deterministic_command(cleaned, state=state)
+        return [command] if command is not None else None
 
     def understand_many(self, text: str, state=None) -> list[Command]:
         """
@@ -63,23 +76,16 @@ class Laya:
         4. Complex Fallback: Deterministic complex search-and-open fallback + Plan Normalization
         5. Fallback: Laya classifier + strict safety validation
         """
+        deterministic = self.understand_deterministic(text, state=state)
+        if deterministic:
+            return deterministic
         cleaned = preprocess_text(text)
-        if not cleaned:
-            raise ValueError("Empty command")
-
-        # 1. Fast Path: Multi-step deterministic clauses
-        multi_cmds = parse_multi_command(text, state=state)
-        if multi_cmds:
-            return multi_cmds
-
-        # 2. Fast Path: Single-step deterministic command
-        deterministic_cmd = parse_deterministic_command(cleaned, state=state)
-        if deterministic_cmd is not None:
-            return [deterministic_cmd]
 
         # 3. Complex Path: Optional selected AI provider/model planner
         if self.llm is not None and self.llm.enabled:
-            llm_cmds = self.llm.plan_actions(text, state=state)
+            with self.metrics.measure("semantic") as outcome:
+                llm_cmds = self.llm.plan_actions(text, state=state)
+                outcome["value"] = "success" if llm_cmds else "abstained"
             if llm_cmds:
                 return llm_cmds
 
@@ -93,16 +99,15 @@ class Laya:
             raise ValueError(f"Ignored unrelated single-word speech: '{cleaned}'")
 
         # 6. Fallback to Laya model prediction + safety validation
-        result = self.agent.predict(cleaned, self.questions)
-        action_name = result["answers"]["action"]["choice"]
-        action = Action(action_name.lower())
-
-        log_laya(f"Predicted: {action.value}")
-
-        target = self._extract_target(cleaned, action)
-        command = Command(action, target)
-
-        return [validate_command(cleaned, command)]
+        with self.metrics.measure("laya") as outcome:
+            result = self.agent.predict(cleaned, self.questions)
+            action_name = result["answers"]["action"]["choice"]
+            action = Action(action_name.lower())
+            log_laya(f"Predicted: {action.value}")
+            target = self._extract_target(cleaned, action)
+            command = validate_command(cleaned, Command(action, target))
+            outcome["value"] = "success"
+            return [command]
 
     def understand(self, text: str, state=None) -> Command:
         commands = self.understand_many(text, state=state)

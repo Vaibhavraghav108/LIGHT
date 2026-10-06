@@ -1,8 +1,9 @@
 # LIGHT Architecture
 
 This is the canonical runtime architecture. The `v0.5.0` release baseline is
-commit `8524bde`; the provider/model milestone described below is implemented
-on its feature branch and retains that runtime pipeline.
+commit `8524bde`; provider/model selection is merged at `777c7d9`. The current
+planning-safety working branch adds ordered asynchronous interpretation without
+replacing the executor, providers, or action vocabulary.
 
 ## Runtime map
 
@@ -16,18 +17,17 @@ VoiceInputProvider -- read-only transcripts --> LIGHT-VoiceListener thread
         |                                      LightLoop.ingest_text
         |                                           |
         |                              explicit STOP sets cancel_event
+        |                              before admission locks / inference
         |                                           |
         +-------------------------------------------v
-                                      CommandQueue (STOP first, normal FIFO)
+                         pure deterministic route OR FIFO planning reservation
                                                    |
-                                                   v
-                                      Laya / decision orchestration
-                          +------------------------+--------------------+
-                          |                        |                    |
-                  deterministic parser      selected AI provider  guarded Laya
-                          +------------------------+--------------------+
+                       LIGHT-PlanningWorker: existing Laya/decision orchestration
+                       selected AI provider -> existing fallback -> guarded Laya
                                                    |
-                                        validated List[Command]
+                           validated List[Command] + cancellation generation gate
+                                                   |
+                           CommandQueue (STOP first, normal FIFO; resolve in place)
                                                    |
                                                    v
                                       LightLoop consumer / Executor
@@ -46,7 +46,8 @@ VoiceInputProvider -- read-only transcripts --> LIGHT-VoiceListener thread
 | Runtime unit | Owner | Work | Shutdown/cancellation |
 | --- | --- | --- | --- |
 | Main thread | `main.py` / `LightLoop.run()` | sequential queue consumption and ordinary execution | loop STOP/finally closes executor and browser |
-| `LIGHT-VoiceListener` | `core/loop.py` | polls the provider every `POLL_INTERVAL` (default 150ms), debounces, ingests | daemon thread; loop stop flag; joined up to 1s |
+| `LIGHT-VoiceListener` | `core/loop.py` | polls the provider every `POLL_INTERVAL` (default 150ms), debounces, admits without inference | daemon; event-woken polling waits; shared bounded loop-close join budget |
+| `LIGHT-PlanningWorker` | `core/loop.py` | single interpretation lane; at most 64 pending reservations plus one in flight | generation invalidation rejects late results; blocking provider/classifier calls remain cooperative/timeout-bound |
 | `LIGHT-AgentWorker` | `core/executor.py` | one synchronous Browser Use task with its own asyncio loop | agent `stop()`, shared event, task cancellation; bounded joins (200ms STOP, configurable close) |
 | Browser Use asyncio loop | `browser/agent.py` | isolated autonomous agent and 10ms cancellation poller | task cancel plus `Browser.close()` in `finally` |
 | Playwright session | `browser/browser.py` | deterministic Chromium context/page | `BrowserController.close()` |
@@ -81,10 +82,20 @@ This is a transcript-event boundary, not an audio API. LIGHT still does not own
 microphone capture, VAD, chunking, or direct Whisper inference.
 
 `LightLoop.ingest_text()` performs explicit STOP detection before brain
-planning. STOP sets `CommandQueue.cancel_event`, clears queued normal work, and
-is inserted at the front. Normal requests remain FIFO. A failed `OPEN_URL` or
-`SEARCH` prunes only dependent requests carrying the same utterance text; it
-does not cancel another plan's work.
+planning. STOP signals cancellation before admission locks, increments the queue
+generation, clears pending work, and is inserted at the front. Normal requests
+remain FIFO: an unknown interpretation reserves its queue position before
+inference and later expands into validated commands at that same position.
+Later commands wait behind that reservation and are interpreted against ordered
+planning context. No admission/queue lock spans inference or browser execution.
+A failed `OPEN_URL` or `SEARCH` prunes dependents by task identity; the text-based
+compatibility path remains for direct queue callers without task records.
+
+Admission, planner publication, dequeue-to-dispatch, and executor entry reject
+cancelled work. STOP does not forcibly terminate synchronous HTTP/classifier
+calls; their late results cannot enter the executable queue. A stopped loop
+cannot be restarted. `process_text()` still waits for execution; callers needing
+responsive ingestion use `ingest_text()` rather than that synchronous wrapper.
 
 The sub-5ms measurement begins when `ingest_text()` receives a transcript. It
 does not cover speech recognition, Handy publication, or the polling interval.
@@ -111,16 +122,26 @@ browser safety checks remain authoritative.
 
 ## Executor and state
 
-`Executor` owns controllers and performs action routing. Most commands verify
-their result and then call `LightState.record_command()` plus observation sync.
+`Executor` owns controllers and performs action routing. Browser operations
+with existing verification checks run those checks before recording state;
+other commands can succeed without independent goal verification.
 `WAIT` and `AGENT_TASK` skip synchronous observation to avoid unnecessary
 AppleScript/process latency. STOP cancels the agent, attempts a bounded join,
-closes the deterministic browser, and records state cleanup.
+closes the deterministic browser, and records state cleanup. Timed-out joins
+retain `agent_running` and `BrowserOwnership.AGENT` until worker cleanup exits.
 
 `LightState` protects mutations with an `RLock`, stores current app/browser,
 URL/site/title, recent command history, search context, pending goal, mouse
 position, and agent status, and creates `clone_for_planning()` snapshots so a
 plan cannot mutate live state before execution.
+
+`TaskRecord` is separate from observed and speculative state. Task status is
+`accepted`, `running`, `verified`, `succeeded`, `failed`, `ambiguous`, or
+`cancelled`. `succeeded` means executor/agent-reported success without independent
+verification; `verified` means the existing action-specific verification path
+completed, not universal proof of the user's goal. Agent dispatch remains
+`running` until the worker reports its result. No capability catalog, context
+memory system, or clarification UI is introduced in this phase.
 
 ## Browser sessions and ownership
 
@@ -129,7 +150,7 @@ plan cannot mutate live state before execution.
 - `LIGHT`: the deterministic Playwright session is the relevant owner;
 - `AGENT`: an isolated Browser Use worker is active; deterministic commands may
   still use their separate Playwright session, but may not erase this signal;
-- `NONE`: no relevant session is active or STOP has cleared state.
+- `NONE`: no relevant session is active after cleanup; not a timed-out join.
 
 The enum is not a mutex and does not serialize the two independent browsers.
 Atomic agent admission under `_agent_lock` prevents two agent workers. The
@@ -217,3 +238,25 @@ provider must supply its own model and endpoint where required.
   a dedicated user notification channel;
 - provider polling is filesystem/database based; there is no direct audio
   pipeline in LIGHT.
+
+## Measurement boundary
+
+`LightLoop.task_status()` exposes the latest 256 transcript-free task snapshots;
+queue diagnostic history is bounded to 512 requests. `Laya.metrics`,
+`QwenPlanner.metrics`, and `BrowserController.metrics` expose counters and the
+latest 256 timing samples. These are in-memory debug/test surfaces, not telemetry
+or a UI. They retain no prompts, URLs, provider responses, or credential values.
+
+Task timestamps use `perf_counter()`. Publication timing is optional and requires
+the same process's monotonic clock; current Handy/custom adapters do not provide
+it. First-visible-effect timing remains unavailable without backend observation
+evidence; dispatch is recorded separately and never substituted for visibility.
+Multi-step task execution/verification timestamps describe the most recent step;
+per-command queue history retains individual execution timings. STOP signal timing
+is interpreted on the STOP task; active tasks use their cancellation timestamp
+to measure planner/agent termination. Shutdown reports surviving workers via
+`shutdown_status` instead of equating a bounded join with termination. Executor
+cleanup exceptions or an explicit failed/incomplete cleanup result set
+`executor_cleanup_failed`; `close()` returns false in that case. Browser close
+itself is still a synchronous third-party operation, not a guaranteed bounded
+resource-cleanup deadline.

@@ -228,13 +228,13 @@ class LightState:
             elif command.action == Action.STOP:
                 self.browser_open = False
                 self.current_browser = None
-                self.browser_ownership = BrowserOwnership.NONE.value
+                self.browser_ownership = (BrowserOwnership.AGENT.value if self.agent_running
+                                          else BrowserOwnership.NONE.value)
                 self.current_url = None
                 self.current_title = None
                 self.current_site = None
                 if self.current_app in {"brave", "chrome", "browser", "chromium"}:
                     self.current_app = None
-                self.agent_running = False
                 self.pending_incomplete_action = None
                 self.pending_goal = None
             else:

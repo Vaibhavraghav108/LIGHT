@@ -9,8 +9,8 @@ verification boundaries.
 | Rule | Enforcement | Honest boundary |
 | --- | --- | --- |
 | Explicit STOP is highest priority | detected before planning; cancellation event set; pending queue cleared; STOP inserted first | <5ms target begins at `ingest_text()`, not spoken audio |
-| Listener stays independent | `LIGHT-VoiceListener` only reads/debounces/enqueues | provider/database polling still has default 150ms cadence |
-| Dependent failure is plan-scoped | failed search/open prunes matching utterance dependents | plan identity is currently the raw utterance text |
+| Listener stays independent | listener admits pure deterministic commands or ordered planning reservations; inference runs on `LIGHT-PlanningWorker` | provider/database polling still has default 150ms cadence; synchronous provider reads may block |
+| Dependent failure is plan-scoped | failed search/open prunes dependents carrying the same task ID | legacy direct queue callers without task records retain text-based compatibility |
 | Agent work does not block normal commands | one `LIGHT-AgentWorker` returns control immediately | agent and deterministic browser can consume resources concurrently |
 | Browser sessions are isolated | Browser Use and Playwright never share a context | `BrowserOwnership` is a state signal, not a lock |
 | No blind named-result fallback | ranked visible candidates require confidence | explicit numeric result requests intentionally select an ordinal |
@@ -41,6 +41,9 @@ event signaling after ingestion. End-to-end voice latency includes external STT
 and up to a polling interval. Active work responds according to its design:
 
 - `WAIT` waits directly on the cancellation event;
+- STOP invalidates the planning generation before a late plan can execute;
+- one planning worker performs inference outside admission/queue locks; at most
+  64 pending interpretations plus one in flight are accepted;
 - named-destination navigation polls the event every 10ms;
 - Browser Use has a 10ms async poller and calls `agent.stop()`/task cancel;
 - STOP joins the worker for up to 200ms before continuing cleanup;
@@ -49,6 +52,20 @@ and up to a polling interval. Active work responds according to its design:
 
 Do not document “all automation aborts within 5ms.” The enforced contract is
 fast cancellation signaling, queue preemption, and cooperative cleanup.
+
+`LightLoop.close()` reports surviving listener/planner/agent workers and failed
+or incomplete executor cleanup. Synchronous browser resource cleanup can still
+block beyond the worker-join budget. An agent
+that outlives a join retains its running/ownership signal until cleanup. A task
+can be `cancelled` while its underlying provider call is still terminating.
+Synchronous model requests are not forcibly aborted, and an already-running
+OS/browser call can still cause an effect after cancellation is signalled.
+Cancellation checks suppress subsequent verification recovery and stale planner
+publication; they cannot make third-party side effects atomic with STOP.
+
+Task admission and agent dispatch are not completion. `succeeded` is a reported
+executor/agent result; `verified` records completion of existing action-specific
+checks, not a newly introduced universal goal-verification guarantee.
 
 ## Browser and webpage safety
 
@@ -109,6 +126,9 @@ rules, and user STOP authority remain required.
   telemetry and cloud sync disabled unless the environment overrides them.
 - Runtime logs can contain spoken commands, URLs, errors, and timings. They are
   ignored by Git and must not be committed without review/redaction.
+- New latency/task metrics contain only identity, generation, fixed status
+  diagnostics, counters, and monotonic timings. They are bounded and in-memory;
+  existing command/state history and runtime logs are not transcript-free.
 - `.env`, browser profiles, and caches are ignored because they may contain
   secrets or session data.
 - Websites receive normal browser traffic and any information a requested task
