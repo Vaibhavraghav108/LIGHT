@@ -111,6 +111,26 @@ rules, and user STOP authority remain required.
 - Physical cursor/click verification checks coordinates and selected UI state;
   it cannot guarantee the absence of OS overlays or last-moment focus changes.
 
+## Typed capability boundary (Phase 2 working branch)
+
+The opt-in internal typed entry point validates schema, backend, task identity,
+generation, and cancellation before admission and again before dispatch.
+Definitions, not plans, own risk/verification metadata. Browser Use is not an
+initial capability backend; no arbitrary shell or application launch is added.
+Browser scroll requires an active controlled browser and cannot fall through to
+desktop scrolling. URL plans require explicit HTTP(S) and reject URL credentials.
+
+Named page activation and keyboard effects require `confirmed=True` from a
+trusted caller. This flag is an acknowledgement, not an authentication system,
+GUI, or automatic permission grant. A future compiler must never accept model or
+webpage text as the source of user confirmation. Existing voice-command semantics
+are unchanged; they are not retrofitted with this internal API's confirmation flag.
+
+Registry availability is not live readiness. Existing focus races, click heuristics,
+third-party cancellation limits, and unverified keyboard/scroll postconditions
+still apply. A `verified` browser status means existing checks completed, not
+universal proof that a requested outcome occurred.
+
 ## Privacy and data handling
 
 - Handy/custom-service audio processing and transcript publication occur

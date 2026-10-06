@@ -4,9 +4,13 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from brain.commands import Action, Command
 from core.tasks import TaskRecord, TaskStatus
+
+if TYPE_CHECKING:
+    from core.capabilities import CapabilityPlan
 
 
 class CommandStatus(Enum):
@@ -40,6 +44,7 @@ class CommandRequest:
     task: TaskRecord | None = None
     generation: int = 0
     ready: threading.Event = field(default_factory=threading.Event, repr=False)
+    capability_plan: "CapabilityPlan | None" = None
 
     # Latency instrumentation timestamps (perf_counter seconds)
     voice_received_at: float = field(default_factory=time.perf_counter)

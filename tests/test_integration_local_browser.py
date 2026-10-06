@@ -5,8 +5,13 @@ import unittest
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from browser.browser import BrowserController
+from core.executor import Executor
+from core.loop import LightLoop
+from core.tasks import TaskStatus
+from tests.provider_test_utils import make_test_ai_provider, make_test_laya
 
 
 INDEX_HTML = """<!DOCTYPE html>
@@ -133,6 +138,35 @@ class TestLocalBrowserIntegration(unittest.TestCase):
 
         visible_text = self.browser.get_visible_text(max_chars=200)
         self.assertIn("Welcome to LIGHT Local Test", visible_text)
+
+    def test_capability_open_scroll_and_typing_reuse_real_local_browser(self):
+        """Typed queue/Executor path reaches real DOM, with OS primitives mocked."""
+        executor = Executor(ai_provider=make_test_ai_provider())
+        executor.browser = self.browser
+        executor.screen = MagicMock()
+        executor.screen.is_browser_foreground.return_value = True
+        executor.screen.get_foreground_window_info.return_value = {"title": "Local fixture", "process_name": ""}
+        executor.screen.get_mouse_position.return_value = (0, 0)
+        executor.keyboard = MagicMock()
+        executor.mouse = MagicMock()
+        # This class fixture, not the loop, owns the shared browser's lifetime.
+        executor.close = MagicMock(return_value=True)
+        loop = LightLoop(MagicMock(), make_test_laya(MagicMock()), executor)
+        self.addCleanup(loop.close)
+        opened = loop.ingest_capability("browser.open_site", {"url": f"{self.base_url}/index.html"})
+        self.assertEqual(loop.execute_next_queued(), "OK")
+        self.assertEqual(self.browser.get_title(), "LIGHT Local Test Home")
+        self.assertEqual(opened.task.status, TaskStatus.VERIFIED)
+        typed = loop.ingest_capability("keyboard.type", {"text": "typed capability"}, confirmed=True)
+        self.assertEqual(loop.execute_next_queued(), "OK")
+        self.assertEqual(self.browser.page.locator("#search").input_value(), "typed capability")
+        self.assertEqual(typed.task.status, TaskStatus.SUCCEEDED)
+        executor.keyboard.type_text.assert_not_called()
+        scrolled = loop.ingest_capability("browser.scroll", {"direction": "down"})
+        self.assertEqual(loop.execute_next_queued(), "OK")
+        self.assertGreater(self.browser.page.evaluate("() => window.scrollY"), 0)
+        self.assertEqual(scrolled.task.status, TaskStatus.SUCCEEDED)
+        executor.mouse.scroll.assert_not_called()
 
     def test_type_in_search_bar_and_locate_elements(self):
         # Verify search bar locating and typing

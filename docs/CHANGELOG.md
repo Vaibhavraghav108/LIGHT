@@ -4,10 +4,38 @@
 
 ---
 
-## [Unreleased working branch] — Phase 0/1 planning safety foundation
+## [Unreleased working branch] — Phase 2 typed capability foundation
+
+Implemented on `codex/typed-capability-foundation` from merged PR #8 main
+`6350e38`; not yet committed, merged, or validated by hosted CI.
+
+### Added
+- Immutable capability definitions/plans, pure registration/availability/schema
+  validation, and lowering into existing Commands/queue/Executor.
+- Eight existing-backed capabilities: explicit browser URL/search/scroll/named
+  element activation, native app launch/window switch, foreground typing/single key.
+- Internal typed admission with issued task identity/generation, dispatch
+  revalidation, and trusted caller confirmation for keyboard/activation effects.
+- 53 capability regressions plus one real localhost typed-path integration test.
+- Local Windows verification: **279 discovered, 271 passed, 8 opt-in host smoke
+  skips, 0 failures/errors**; 1,060 repeated capability-test executions passed
+  with no surviving LIGHT workers. Compileall and diff checks passed. Hosted
+  Windows/macOS Phase 2 CI and physical-host validation are not claimed.
+
+### Safety and limits
+- Typed browser scroll rejects an inactive browser, including a dispatch-time
+  close, instead of falling through to desktop scrolling. Legacy voice scrolling
+  and deterministic routing remain unchanged.
+- `browser.read` is deferred: existing reads log content, not structured results.
+  Nonempty dependencies and unresolved semantic/typed mixing fail closed.
+- No compiler, entity memory, vision, accessibility, audio STT, new provider/model,
+  agent/backend redesign, dependency, or CI change is included.
+- Verification/cancellation/timeout contracts explicitly retain existing limits.
+
+## [Merged PR #8] — Phase 0/1 planning safety foundation
 
 Implemented on `codex/planning-safety-foundation` from merged main `777c7d9`;
-not yet committed/merged or validated by hosted CI.
+commit `884afb3`, merged into main at `6350e38` by PR #8.
 
 ### Added
 - One bounded `LIGHT-PlanningWorker` with FIFO reservations, task identity,
@@ -15,7 +43,7 @@ not yet committed/merged or validated by hosted CI.
 - Bounded in-memory transcript-free task/status and inference/startup timing
   evidence. Missing publication/visible-effect measurements remain unavailable.
 - 33 event-controlled regressions; 20 repeated runs passed 660 executions with
-  no surviving LIGHT workers. Current Windows suite:
+  no surviving LIGHT workers. That milestone's Windows suite:
   **225 discovered, 217 passed, 8 opt-in host smoke skips,
   0 failures/errors**. Compileall and diff checks pass.
 

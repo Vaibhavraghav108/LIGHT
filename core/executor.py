@@ -195,6 +195,9 @@ class Executor:
         elif action == Action.SCROLL:
             if self.browser.is_active():
                 self.browser.scroll(target)
+            elif request is not None and getattr(request, "capability_plan", None) is not None:
+                # A browser-only capability must never fall through to desktop effects.
+                raise RuntimeError("Browser scroll capability requires an active browser")
             else:
                 self.mouse.scroll(target)
 

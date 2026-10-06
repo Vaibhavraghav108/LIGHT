@@ -22,12 +22,19 @@ physical validation on every supported host.
 
 ## Current hardening priorities
 
-Phase 0/1 is implemented on `codex/planning-safety-foundation`, pending review:
+Phase 0/1 is merged by PR #8 at `6350e38`:
 bounded non-blocking planning, ordered admission, cancellation generations,
 task identity/results, truthful worker ownership, and bounded timing evidence.
-This does not implement the capability architecture or new automation backends.
-Next, separately design Phase 2's typed capability/context boundary around real
-existing commands and action-specific verification; do not auto-start that work.
+Phase 2 is implemented on `codex/typed-capability-foundation`, pending review:
+eight opt-in typed capabilities backed by existing commands, a pure registry,
+strict admission/dispatch validation, and existing action-specific verification.
+No new automation backend, structured read result, dependency scheduler, or
+context/entity system is included. See [ARCHITECTURE.md](ARCHITECTURE.md).
+
+Next, separately review Phase 2 and obtain authorization for Phase 3: one bounded
+semantic compiler call into the validated capability boundary, initially only
+single-step supported plans, with out-of-band confirmation and deterministic
+rejection tests. Do not auto-start compiler/context/vision/agent work.
 
 1. **Resolve optional dependency metadata conflict** — select a compatible
    Browser Use/Laya/Hugging Face set and validate agent behavior before changing

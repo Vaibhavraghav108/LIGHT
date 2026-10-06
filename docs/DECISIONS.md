@@ -383,7 +383,7 @@ continuous-listening regressions.
 # ADR-016 — Ordered Non-Blocking Planning and Truthful Task Results
 
 ## Status
-Implemented on the planning-safety working branch; not yet merged.
+Merged by PR #8 into main at `6350e38`.
 
 ## Decision
 Keep pure deterministic parsing at ingestion. Reserve FIFO positions for unknown
@@ -424,3 +424,42 @@ also produced misleading completion/ownership signals.
 `core/loop.py`, `core/queue_manager.py`, `core/tasks.py`, `core/metrics.py`,
 `core/executor.py`, `core/state.py`, `brain/laya.py`, `brain/llm.py`,
 `browser/agent.py`, `browser/browser.py`, `tests/test_planning_foundation.py`.
+
+---
+
+# ADR-017 — Opt-In Typed Capabilities over the Existing Executor
+
+## Status
+Implemented on `codex/typed-capability-foundation`; not yet merged.
+
+## Decision
+Keep eight concretely backed capabilities in a pure, typed registry. Lower each
+validated single-step plan to an existing Command and use the existing queue,
+consumer, Executor, verification, observed state, and cancellation generation.
+Do not migrate normal voice routing, introduce another executor, or involve an LLM.
+
+Keep definition metadata authoritative. Issue task identity inside the loop and
+revalidate plans at dispatch. Reject unresolved semantic/typed admission mixing
+instead of adding speculative replay or a second scheduler. Require explicit
+trusted caller acknowledgement for named activation and keyboard effects.
+
+## Reason
+The stable WHAT boundary should describe real execution guarantees rather than
+hide backend switching or pretend every successful dispatch has a verified result.
+Existing native browser/application aliases, ordinal click parsing, browser-only
+scrolling, and log-only reads require explicit scope rather than generic wrappers.
+
+## Consequences
+- Browser activation means a named page-element click, not tab/OS activation.
+- Browser scrolling never falls through to desktop scrolling on the typed path.
+- Keyboard typing deliberately retains existing focus-aware DOM/OS routing.
+- `browser.read` is deferred until a real structured result contract exists.
+- Nonempty dependencies, semantic compilation, entity resolution, new backends,
+  and agent capabilities are outside Phase 2.
+- The registry's availability is structural; dispatch still checks runtime
+  preconditions, and existing backend interruption/verification limits remain.
+
+## Related Components
+`core/capabilities.py`, `core/capability_adapter.py`, `core/loop.py`,
+`core/queue_manager.py`, `core/executor.py`, `tests/test_capabilities.py`,
+`tests/test_integration_local_browser.py`.
