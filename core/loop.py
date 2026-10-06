@@ -5,6 +5,7 @@ import itertools
 import re
 import threading
 import time
+from collections.abc import Mapping
 
 from brain.commands import Action, Command
 from brain.decision import is_explicit_stop_or_cancel
@@ -17,6 +18,8 @@ from core.queue_manager import (
 )
 from core.state import LightState
 from core.tasks import TaskRecord, TaskStatus, AmbiguousPlanError
+from core.capabilities import Backend, CapabilityError, CapabilityPlan, default_registry
+from core.capability_adapter import CapabilityAdapter
 from utils.logger import (
     log_debug,
     log_error,
@@ -69,6 +72,8 @@ class LightLoop:
         self._task_ids = itertools.count(1)
         self._tasks = collections.deque(maxlen=256)
         self._closed = False
+        self.capabilities = default_registry()
+        self._capability_adapter = CapabilityAdapter(self.capabilities)
         self._listener_thread = None
         self.shutdown_status = {}
 
@@ -219,6 +224,44 @@ class LightLoop:
                 for cmd in commands:
                     self._planning_state.record_command(reservation.text, cmd)
 
+    def ingest_capability(self, name: str, arguments: Mapping[str, object], *,
+                          backend: Backend | None = None, confirmed: bool = False) -> CommandRequest:
+        """Internal typed entry point; ordinary voice routing is not migrated.
+
+        Task identities are issued here, never accepted from an external plan.
+        Confirmation is an explicit trusted caller acknowledgement, not an LLM field.
+        """
+        with self._admission_lock:
+            if self._closed or self.command_queue.cancel_event.is_set():
+                raise CapabilityError("Loop is stopping")
+            if self._pending_plans or self._planning_inflight is not None:
+                # Do not let an older semantic snapshot overwrite typed predictions.
+                # Mixed semantic/typed plan admission is deferred, not a new scheduler.
+                raise CapabilityError("Typed admission requires resolved interpretations")
+            definition = self.capabilities.lookup(name)
+            task = TaskRecord(next(self._task_ids), self.command_queue.generation)
+            task.mark("ingested")
+            self._tasks.append(task)
+            try:
+                plan = CapabilityPlan(name, arguments, task.id, task.generation,
+                                      backend if backend is not None else definition.backends[0],
+                                      confirmed=confirmed)
+                command = self._capability_adapter.lower(
+                    plan, task=task, generation=self.command_queue.generation,
+                    cancelled=self.command_queue.cancel_event.is_set())
+            except CapabilityError:
+                task.fail(TaskStatus.FAILED, "Invalid capability plan")
+                raise
+            if not self.command_queue.is_busy():
+                self._planning_state = self.state.clone_for_planning()
+            task.remaining_steps = 1
+            req = CommandRequest(name, command, task=task, generation=task.generation,
+                                 capability_plan=plan)
+            self.command_queue.enqueue(req)
+            if req.status != CommandStatus.CANCELLED:
+                self._planning_state.record_command(name, command)
+            return req
+
     def task_status(self) -> list[dict]:
         with self._admission_lock:
             return [task.snapshot() for task in self._tasks]
@@ -253,6 +296,15 @@ class LightLoop:
                 (req.task is not None and req.task.status == TaskStatus.CANCELLED)):
             req.cancel("Cancelled before dispatch")
             return False
+        if req.capability_plan is not None:
+            command = self._capability_adapter.lower(
+                req.capability_plan, task=req.task, generation=self.command_queue.generation,
+                cancelled=self.command_queue.cancel_event.is_set())
+            if command != req.command or req.generation != req.capability_plan.generation:
+                raise CapabilityError("Capability command or generation changed after admission")
+            definition = self.capabilities.lookup(req.capability_plan.capability)
+            if definition.requires_active_browser and not self.executor.browser.is_active():
+                raise CapabilityError("Capability requires an active controlled browser")
         if req.task:
             req.task.running()
             req.task.mark("execution_started", req.execution_started_at)

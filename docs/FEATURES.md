@@ -1,4 +1,4 @@
-# LIGHT Feature Status (`v0.5.0` plus provider/model milestone)
+# LIGHT Feature Status (`v0.5.0` plus merged foundations and Phase 2 working branch)
 
 Status reflects source plus available evidence, not aspiration. Definitions are
 in [README.md](README.md). “CI” means the automated Windows/macOS matrix; it is
@@ -18,9 +18,11 @@ not physical-device certification.
 | priority queue and plan-scoped pruning | Implemented | `test_queue_and_llm.py` | consumer still executes ordinary commands sequentially |
 | ingestion-time STOP priority | Implemented | queue/new-feature timing tests | sub-5ms boundary excludes STT/polling; running calls vary |
 | thread-safe contextual state | Implemented | state/ownership tests | observation can become stale between checks |
-| non-blocking ordered interpretation | Implemented on working branch | `test_planning_foundation.py` | one worker; 64 pending plans plus one in flight; later commands cannot overtake |
-| cancellation generations/task identity | Implemented on working branch | stale-plan and concurrent-ingestion tests | in-flight third-party calls remain cooperative/timeout-bound |
-| truthful bounded task/latency diagnostics | Implemented on working branch | status/metrics regressions | debug API, not GUI; missing publication/visible-effect evidence remains unavailable |
+| non-blocking ordered interpretation | Implemented (PR #8 merged) | `test_planning_foundation.py` | one worker; 64 pending plans plus one in flight; later commands cannot overtake |
+| cancellation generations/task identity | Implemented (PR #8 merged) | stale-plan and concurrent-ingestion tests | in-flight third-party calls remain cooperative/timeout-bound |
+| truthful bounded task/latency diagnostics | Implemented (PR #8 merged) | status/metrics regressions | debug API, not GUI; missing publication/visible-effect evidence remains unavailable |
+| typed capability registry/adapter | Implemented on Phase 2 working branch | `test_capabilities.py`; localhost integration | eight single-step capabilities; internal opt-in; no semantic compiler, dependency scheduler, or entity resolver |
+| structured capability read result | Not implemented | current Executor returns status and logs reads | `browser.read` is not registered; existing read commands remain available |
 
 ## Brain and planning
 
@@ -77,7 +79,7 @@ not physical-device certification.
 | one atomic agent admission | Implemented | concurrency regression | one task at a time |
 | non-blocking `LIGHT-AgentWorker` | Implemented | sync/async consumer tests | daemon may outlive bounded join if dependency hangs |
 | cooperative STOP/cancellation | Partial | mocked async/worker tests | Browser Use internals may not stop immediately |
-| agent result notification UI | Not implemented | logs/state and working-branch task snapshots | no dedicated completion surface; reported success is not independent goal verification |
+| agent result notification UI | Not implemented | logs/state and task snapshots | no dedicated completion surface; reported success is not independent goal verification |
 
 ## Reliability, privacy, and delivery
 

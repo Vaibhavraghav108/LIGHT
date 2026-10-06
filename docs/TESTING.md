@@ -1,14 +1,54 @@
 # LIGHT Testing Guide
 
-## Planning-safety working-branch baseline — 2026-10-06
+## Phase 2 typed-capability working-branch baseline — 2026-10-06
+
+Branch `codex/typed-capability-foundation` starts from merged PR #8 main
+`6350e38`. Before changes: **225 discovered, 217 passed, 8 opt-in host smoke
+skips, 0 failures/errors**, 31.193s locally on Windows.
+After Phase 2: **279 discovered, 271 passed, 8 opt-in host smoke skips,
+0 failures, 0 errors**, 26.402s on the same Windows host. Targeted capability
+tests passed **53/53**; twenty repetitions passed **1,060 test executions**
+with no failures/errors and no surviving LIGHT workers. The final full suite
+includes **six real localhost/headless-Chromium tests**. Compileall and
+`git diff --check` passed.
+
+`test_capabilities.py` adds **53 tests** covering registration, duplicate/unknown
+rejection, strict arguments/backends/identity/generation, URL safety, confirmation,
+immutability, action lowering, existing browser/desktop/keyboard routing,
+admission/dispatch cancellation, sync/async paths, STOP under an admission lock,
+backlog cancellation beyond snapshot retention, stale predictions, verification,
+and shutdown. One additional localhost integration test exercises typed open,
+DOM typing, and scroll through the real queue/Executor/Chromium path. Existing
+assertions and skips are preserved.
+
+Hosted Windows/macOS CI has not run on these uncommitted Phase 2 changes.
+The workflow/matrix, provider/model configuration, dependency pins, and platform
+implementations are unchanged. Physical voice/Mac checks remain opt-in limitations.
+
+Controlled pure-CPU measurements on this Windows host (5,000 samples each):
+
+| Operation | P50 / P95 / P99 |
+| --- | --- |
+| Registry lookup | 0.2 / 0.2 / 0.3 microseconds |
+| Plan validation | 8.6 / 8.9 / 13.9 microseconds |
+| Lowering including validation | 9.1 / 9.4 / 15.7 microseconds |
+
+Matched ordinary `press tab` voice ingestion, 1,000 samples per implementation,
+logging disabled and execution outside the timing interval: main **42.3 / 52.1 /
+73.4 microseconds**, Phase 2 **42.2 / 50.7 / 64.0 microseconds** (P50/P95/P99).
+Main loop/queue were loaded in-memory from Git without modifying the checkout.
+This shows no meaningful deterministic-ingestion regression, not a claimed speedup
+or hardware SLA. Registry measurements include no backend/network/model work.
+
+## Planning-safety milestone baseline — 2026-10-06
 
 Branch `codex/planning-safety-foundation` starts from clean merged main
 `777c7d9`. Before changes: **192 discovered, 184 passed, 8 opt-in skips,
 0 failures/errors**, 29.385s on Windows. After Phase 0/1: **225 discovered,
 217 passed, 8 opt-in skips, 0 failures/errors**, 26.370s. This includes the
 five real localhost/headless-Chromium integration tests; it is not a physical
-voice or Mac certification. Hosted Windows/macOS CI has not run on these
-uncommitted changes; its workflow/matrix is unchanged.
+voice or Mac certification. These historical local measurements preceded the
+Phase 0/1 commit and PR #8 merge; they are not Phase 2 CI evidence.
 
 The new `test_planning_foundation.py` contains **33 tests** covering bounded
 planning, spoken STOP while inference is blocked, stale publication, FIFO and
@@ -110,15 +150,17 @@ LM Studio, Ollama, Handy, or custom-service claims.
 | Layer | Files | Count | What it proves | What it does not prove |
 | --- | --- | ---: | --- | --- |
 | Unit/parser/platform mocks | `test_laya`, `test_voice*`, `test_computer`, `test_browser`, `test_platform_macos` | 60 | parsing, routing, validation, provider behavior, platform commands | real OS permissions/hardware/GUI results |
-| Local real-browser integration | `test_integration_local_browser` | 5 | headless Chromium against localhost DOM; copy path reaches real clipboard | public websites, real display coordinates, clipboard availability everywhere |
+| Local real-browser integration | `test_integration_local_browser` | 6 | headless Chromium against localhost DOM; typed capability path; copy path reaches real clipboard | public websites, real display coordinates, clipboard availability everywhere |
 | Queue/LLM/reliability | `test_queue_and_llm`, `test_new_features` | 83 | concurrency, cancellation, normalization, ownership, agent lifecycle with mocks/local pages | live Ollama or a full Browser Use research run |
 | Provider/model architecture | `test_provider_architecture` | 36 | configuration, provider-aware defaults, strict activation validation, protocol shapes, credentials, redaction, no-fallback, planner/agent reuse | live external accounts, model quality, direct audio STT |
-| Planning-safety foundation (working branch) | `test_planning_foundation` | 33 | ordered planning, cancellation generations, bounded metrics, status, truthful ownership/shutdown | physical speech/display timing, guaranteed interruption of third-party calls |
+| Planning-safety foundation (merged PR #8) | `test_planning_foundation` | 33 | ordered planning, cancellation generations, bounded metrics, status, truthful ownership/shutdown | physical speech/display timing, guaranteed interruption of third-party calls |
+| Typed capabilities (Phase 2 working branch) | `test_capabilities` | 53 | pure contracts, validation/lowering, existing mocked execution, cancellation/status/shutdown | live providers, new structured results, physical GUI behavior |
 | Opt-in host smoke | `test_windows_smoke`, `test_macos_smoke` | 8 | selected browser, clipboard, display, and provider observations on the current host | destructive actions or full end-to-end voice workflow |
 
 Per-file counts: voice 6, voice provider 6, Laya 16, computer 14,
-macOS platform 9, browser 9, local browser 5, queue/LLM 25, new features 58,
-provider architecture 36, planning foundation 33, Windows smoke 4, macOS smoke 4.
+macOS platform 9, browser 9, local browser 6, queue/LLM 25, new features 58,
+provider architecture 36, planning foundation 33, capabilities 53,
+Windows smoke 4, macOS smoke 4.
 
 ## Stable commands
 

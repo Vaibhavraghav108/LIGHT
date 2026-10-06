@@ -1,9 +1,10 @@
 # LIGHT Architecture
 
 This is the canonical runtime architecture. The `v0.5.0` release baseline is
-commit `8524bde`; provider/model selection is merged at `777c7d9`. The current
-planning-safety working branch adds ordered asynchronous interpretation without
-replacing the executor, providers, or action vocabulary.
+commit `8524bde`; provider/model selection is merged at `777c7d9`, and Phase 0/1
+planning safety is merged by PR #8 at `6350e38`. The Phase 2 working branch adds
+an opt-in typed capability boundary without replacing the executor, providers,
+or action vocabulary.
 
 ## Runtime map
 
@@ -140,8 +141,68 @@ plan cannot mutate live state before execution.
 `cancelled`. `succeeded` means executor/agent-reported success without independent
 verification; `verified` means the existing action-specific verification path
 completed, not universal proof of the user's goal. Agent dispatch remains
-`running` until the worker reports its result. No capability catalog, context
-memory system, or clarification UI is introduced in this phase.
+`running` until the worker reports its result. Phase 0/1 introduced no capability
+catalog; Phase 2's opt-in catalog is described below. Neither phase introduces
+a context memory system or clarification UI.
+
+## Phase 2: typed capabilities (working branch)
+
+`core/capabilities.py` contains immutable `Capability`, `Argument`, and
+`CapabilityPlan` contracts plus a small definition registry. Definitions own
+purpose, schema, backend support, risk, confirmation, execution mode,
+preconditions, cancellation/timeout expectations, verification, and state-effect
+descriptions. Risk and verification are authoritative definition metadata, not
+fields an untrusted producer can override. Plans own copied read-only arguments,
+task identity/generation, backend, mode, source, and caller confirmation.
+
+| Capability | Existing action/backend | Scope |
+| --- | --- | --- |
+| `browser.open_site` | `OPEN_URL` / Playwright | explicit HTTP(S) URL without embedded credentials |
+| `browser.search` | `SEARCH` / Playwright | explicit Google (default), YouTube, or GitHub query |
+| `browser.scroll` | `SCROLL` / Playwright | active controlled browser only; never desktop fallback |
+| `browser.activate` | `CLICK_ELEMENT` / Playwright | confirmed named page element; not an ordinal, OS window, or browser tab |
+| `browser.read` | not registered | existing reads log content, but Executor returns status rather than structured content |
+| `desktop.open_app` | `OPEN_APP` / platform | canonical `notepad` (TextEdit on macOS) or `calculator`; no arbitrary launch |
+| `desktop.switch_window` | `SWITCH_WINDOW` / platform | existing window-name matching/focus behavior |
+| `keyboard.type` | `TYPE` / foreground keyboard | confirmed existing DOM/OS focus-aware routing, including its fallback |
+| `keyboard.press` | `PRESS_KEY` / foreground keyboard | confirmed single-key subset; no chords or shell action |
+
+Registration/lookup/validation are pure CPU/in-memory operations: no backend
+imports, model calls, screenshots, execution, process probes, or network I/O.
+Availability means a definition/backend is registered, not that a live host,
+browser, application, or permission is ready. Registration is initialization-time
+only; there is no plugin/discovery framework or runtime replacement of definitions.
+
+`CapabilityAdapter.lower()` validates and produces an existing `Command`.
+`LightLoop.ingest_capability()` is a trusted internal/testing entry point that
+issues task IDs/generations and enqueues that command in the existing queue.
+Consumers revalidate the attached plan/command/generation before calling the
+unchanged execution routes, on the same owning thread. Browser preconditions are
+checked at dispatch, not by registry lookup. A narrow Executor scroll guard also
+rejects a browser closing between the precondition and the action's routing check.
+
+```python
+request = loop.ingest_capability("browser.open_site", {"url": "https://example.com"})
+loop.execute_next_queued()  # existing sync consumer; async consumer also supported
+```
+
+Unknown capabilities/arguments, missing/empty/wrongly typed arguments, invalid
+URLs/choices, unsupported backends/modes/sources, mismatched or stale identities,
+terminal/cancelled tasks, and absent required confirmation fail closed. Phase 2
+plans are single-step: `dependencies` is reserved and must be an empty tuple.
+Typed admission rejects unresolved semantic interpretations rather than waiting
+or letting an older planning snapshot overwrite typed predictions. Existing
+voice commands remain on their existing fast/planning paths, without registry
+validation or a changed model/agent selection.
+
+Verification is inherited, not upgraded: browser readiness/click checks do not
+prove an arbitrary user goal. Desktop foreground checks retain the existing
+`succeeded` status without browser-verification timestamps. Scroll/keyboard actions
+have no independent postcondition and must not report `verified`. Timeouts and
+interruption remain backend-specific; no universal execution deadline is added.
+
+There is no semantic compiler, dependency scheduler, entity/context resolver,
+structured read-result API, vision/accessibility backend, or agent capability yet.
 
 ## Browser sessions and ownership
 
