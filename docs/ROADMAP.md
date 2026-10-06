@@ -22,6 +22,13 @@ physical validation on every supported host.
 
 ## Current hardening priorities
 
+Phase 0/1 is implemented on `codex/planning-safety-foundation`, pending review:
+bounded non-blocking planning, ordered admission, cancellation generations,
+task identity/results, truthful worker ownership, and bounded timing evidence.
+This does not implement the capability architecture or new automation backends.
+Next, separately design Phase 2's typed capability/context boundary around real
+existing commands and action-specific verification; do not auto-start that work.
+
 1. **Resolve optional dependency metadata conflict** — select a compatible
    Browser Use/Laya/Hugging Face set and validate agent behavior before changing
    pins.

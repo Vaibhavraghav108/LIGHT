@@ -1,5 +1,82 @@
 # LIGHT Testing Guide
 
+## Planning-safety working-branch baseline — 2026-10-06
+
+Branch `codex/planning-safety-foundation` starts from clean merged main
+`777c7d9`. Before changes: **192 discovered, 184 passed, 8 opt-in skips,
+0 failures/errors**, 29.385s on Windows. After Phase 0/1: **225 discovered,
+217 passed, 8 opt-in skips, 0 failures/errors**, 26.370s. This includes the
+five real localhost/headless-Chromium integration tests; it is not a physical
+voice or Mac certification. Hosted Windows/macOS CI has not run on these
+uncommitted changes; its workflow/matrix is unchanged.
+
+The new `test_planning_foundation.py` contains **33 tests** covering bounded
+planning, spoken STOP while inference is blocked, stale publication, FIFO and
+concurrent ingestion, task identity/results, sync/async cancellation (including
+repeated async cancellation), verification recovery, metrics, and truthful
+worker shutdown/ownership and cleanup failures. Twenty repeated runs executed
+**660 tests with no failures/errors and no surviving LIGHT workers**.
+Existing test 52 retains its shutdown latency/cancel checks
+and now asserts ownership until its cancellation-ignoring fixture actually exits.
+No tests were deleted, skipped, or loosened to hide a failure.
+
+Additional targeted results: provider/platform/voice **57/57 passed**;
+queue/new-feature **83/83 passed**. Full compileall and `git diff --check`
+passed. `pip check` still fails for the pre-existing click metadata conflict
+described below; dependencies were not changed.
+
+Commands used for the final checks:
+
+```powershell
+.\lightenv\Scripts\python.exe -m unittest tests.test_planning_foundation -q
+.\lightenv\Scripts\python.exe -m unittest tests.test_queue_and_llm tests.test_new_features -q
+.\lightenv\Scripts\python.exe -m unittest tests.test_provider_architecture tests.test_platform_macos tests.test_voice tests.test_voice_provider -q
+.\lightenv\Scripts\python.exe -m unittest discover -s tests -v
+.\lightenv\Scripts\python.exe -m compileall -q main.py config.py providers voice brain computer browser core utils tests
+.\lightenv\Scripts\python.exe -m pip check
+git diff --check
+git status --short --branch
+```
+
+### Controlled latency evidence
+
+Measurements use `perf_counter()` on the development Windows host, not hosted CI.
+P95/P99 are empirical sorted-sample percentiles, not production SLAs.
+
+| Measurement | Samples | P50 / P95 / P99 or observed result |
+| --- | ---: | --- |
+| Baseline deterministic ingestion, main loop/queue from `777c7d9` | 500 | 0.042 / 0.062 / 0.093ms |
+| Foundation deterministic ingestion, same parser/fixture, logging disabled for both | 500 | 0.050 / 0.084 / 0.101ms |
+| Simulated 200ms inference: old ingestion vs new submission | one each | 200.524ms blocked vs 0.728ms submission; worker inference still 200.329ms |
+| Queue wait, mocked executor | 200 | 0.009 / 0.013 / 0.029ms |
+| Execution, mocked executor | 200 | 0.029 / 0.040 / 0.058ms |
+| STOP ingestion to cancellation signal | 200 | 0.0049 / 0.0109 / 0.0152ms |
+| STOP to planner return, event-controlled fixture immediately released after STOP | 100 | 0.043 / 0.064 / 0.073ms |
+| Existing browser verification, mocked browser | 100 | 0.023 / 0.037 / 0.053ms |
+| Fresh real headless Chromium startup | 5 | median 670ms; range 659–703ms |
+| Selected local `qwen2.5:3b`, resident model, actual validated planner requests | 3 | 4943 / 5097 / 5404ms individual calls; all returned valid plans |
+| Selected local `qwen2.5:3b`, not resident before request | 1 | existing 8s provider timeout, no valid plan; cold completion latency not obtained |
+
+The matched deterministic measurement shows about **0.008ms median overhead**
+for identity/status/timing, not a deterministic speedup. The improvement is
+removal of inference from ingestion. The old loop/queue were evaluated in-memory
+from `git show`, without checking out or modifying main. The live local-model
+probe executed no desktop/browser actions and did not change model selection.
+After the cold timeout, the planner's existing cooldown suppressed two further
+requests; those near-zero returns are **not warm inference measurements**.
+The separate resident-model run used a fresh planner with the same selection.
+Three warm calls and five browser starts are too few for credible tail estimates.
+
+Read timings through `LightLoop.task_status()` and `.metrics.snapshot()` on
+Laya, the planner, or browser controller. Counters include success/failure and
+semantic abstention; false-positive Laya STOP rejection has explicit coverage.
+Publication-to-ingestion and first-visible-effect remain **unavailable** unless
+the source/backend provides evidence. Handy/custom adapters currently do not
+provide a same-process monotonic publication timestamp, and no physical display
+effect was measured. Do not reinterpret dispatch or a socket timeout as either
+visibility or worker termination. Task execution timings cover the latest step;
+per-command queue history preserves individual step timings.
+
 ## Dated `v0.5.0` baseline
 
 The tagged release (`8524bde`, 2026-10-04) discovers **155 tests**. GitHub
@@ -20,9 +97,9 @@ converted into a skip; source and tests were not changed by this documentation
 milestone. After the targeted pass, the final full rerun completed in 26.050s
 with **147 passing and 8 skipped**.
 
-The provider/model feature branch adds 36 deterministic provider regression
-tests plus one Handy-path regression. Its final local Windows full-suite result
-is **192 discovered, 184 passing, 8 skipped, 0 failures, and 0 errors** with
+The merged provider/model milestone added 36 deterministic provider regression
+tests plus one Handy-path regression. Its final local Windows full-suite baseline
+was **192 discovered, 184 passing, 8 skipped, 0 failures, and 0 errors** with
 both the persisted non-default
 `qwen2.5:3b` selection and a clean/default `qwen3:1.7b` selection. These tests
 mock provider HTTP/SDK boundaries; they do not make live OpenAI, Claude, Gemini,
@@ -36,11 +113,12 @@ LM Studio, Ollama, Handy, or custom-service claims.
 | Local real-browser integration | `test_integration_local_browser` | 5 | headless Chromium against localhost DOM; copy path reaches real clipboard | public websites, real display coordinates, clipboard availability everywhere |
 | Queue/LLM/reliability | `test_queue_and_llm`, `test_new_features` | 83 | concurrency, cancellation, normalization, ownership, agent lifecycle with mocks/local pages | live Ollama or a full Browser Use research run |
 | Provider/model architecture | `test_provider_architecture` | 36 | configuration, provider-aware defaults, strict activation validation, protocol shapes, credentials, redaction, no-fallback, planner/agent reuse | live external accounts, model quality, direct audio STT |
+| Planning-safety foundation (working branch) | `test_planning_foundation` | 33 | ordered planning, cancellation generations, bounded metrics, status, truthful ownership/shutdown | physical speech/display timing, guaranteed interruption of third-party calls |
 | Opt-in host smoke | `test_windows_smoke`, `test_macos_smoke` | 8 | selected browser, clipboard, display, and provider observations on the current host | destructive actions or full end-to-end voice workflow |
 
 Per-file counts: voice 6, voice provider 6, Laya 16, computer 14,
 macOS platform 9, browser 9, local browser 5, queue/LLM 25, new features 58,
-provider architecture 36, Windows smoke 4, macOS smoke 4.
+provider architecture 36, planning foundation 33, Windows smoke 4, macOS smoke 4.
 
 ## Stable commands
 

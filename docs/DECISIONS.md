@@ -377,3 +377,50 @@ continuous-listening regressions.
 ## Related Components
 - `providers/`, `brain/llm.py`, `browser/agent.py`, `voice/factory.py`,
   `voice/custom_api_provider.py`, `main.py`, `.gitignore`
+
+---
+
+# ADR-016 — Ordered Non-Blocking Planning and Truthful Task Results
+
+## Status
+Implemented on the planning-safety working branch; not yet merged.
+
+## Decision
+Keep pure deterministic parsing at ingestion. Reserve FIFO positions for unknown
+interpretations and resolve them with one `LIGHT-PlanningWorker`, bounded to
+64 pending items plus one in flight. Continue using the existing validated
+`List[Command]` boundary, selected AIProvider, fallback order, and executor.
+Do not introduce speculative capability registrations in Phase 1.
+
+Signal explicit STOP before admission locks, invalidate the queue generation,
+and reject late plans and cancelled dispatches. Keep predicted planning state
+separate from observed `LightState`. Assign numeric task IDs so repeated text
+does not identify distinct plans as the same plan.
+
+Record bounded, transcript-free statuses/timings. Distinguish admission,
+execution, existing verification, and agent-reported success. A bounded join is
+not termination: preserve agent ownership while its worker survives cleanup.
+
+## Reason
+The listener previously held a planning lock while synchronously interpreting
+speech. A slow model could prevent ingestion of the next spoken STOP. There
+was no generation barrier for a late plan; agent dispatch and timed-out joins
+also produced misleading completion/ownership signals.
+
+## Consequences
+- Deterministic requests remain model-free and very fast; ordered semantic work
+  no longer blocks transcript admission or STOP signaling.
+- A pending interpretation intentionally delays later execution and contextual
+  parsing rather than allowing those commands to overtake it.
+- Provider/classifier inference remains timeout-bound or cooperative; late
+  results are rejected, not forcibly interrupted. Surviving daemon workers
+  remain a shutdown limitation.
+- Metrics add small measured admission overhead; missing publication/visible
+  effect evidence stays unavailable rather than being invented.
+- Phase 2 can extend the validated plan boundary after a separate design review;
+  capabilities, typed conversational context, and new backends are not included.
+
+## Related Components
+`core/loop.py`, `core/queue_manager.py`, `core/tasks.py`, `core/metrics.py`,
+`core/executor.py`, `core/state.py`, `brain/laya.py`, `brain/llm.py`,
+`browser/agent.py`, `browser/browser.py`, `tests/test_planning_foundation.py`.

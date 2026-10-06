@@ -538,7 +538,7 @@ Browser copy actions ignored clipboard read-back failure and reported success. S
 The boolean result of `_write_and_verify_clipboard()` was discarded, and STOP had a special early return that bypassed normal state recording.
 
 ### Fix
-Browser copy paths raise on failed clipboard verification. Desktop copy/paste routes through `KeyboardController` for platform modifier mapping. STOP records its command after shutdown and clears browser URL, title, site, app, and ownership state.
+Browser copy paths raise on failed clipboard verification. Desktop copy/paste routes through `KeyboardController` for platform modifier mapping. STOP records its command after shutdown and clears browser URL, title, site, and browser-app state. On the planning-safety branch, a surviving agent retains ownership until its worker actually exits.
 
 ### Regression Tests
 - `tests/test_browser.py::TestBrowserAndContextFlow::test_copy_selected_text_requires_verified_clipboard_write`
@@ -608,3 +608,39 @@ STT provider.
 
 ### Regression Test
 - `tests/test_voice_provider.py::TestVoiceProviders::test_factory_returns_unavailable_when_handy_path_is_inaccessible`
+
+---
+
+## Issue 23 — Slow Interpretation Delayed Spoken STOP and Published Stale Plans
+
+### Problem / cause
+`ingest_text()` previously interpreted speech synchronously under the planning
+lock. The listener could not ingest a later STOP while a model was blocked.
+There was no cancellation-generation check before publishing a late plan.
+
+### Working-branch fix
+Pure deterministic commands remain immediate. Unknown requests reserve FIFO
+positions and use one bounded planning worker outside admission locks. STOP
+signals first, invalidates the generation, and cancels pending work; stale
+results are discarded before queue publication/dispatch. Planning predictions
+remain separate from observed state. Failed prerequisites use task IDs rather
+than repeated transcript text for isolation.
+
+Inspect `LightLoop.task_status()` for interpretation failures/backlog rejection
+and `shutdown_status` for surviving workers or `executor_cleanup_failed`. A
+reported cancellation does not
+mean a synchronous model request has already terminated. If a planner is still
+running, wait for its configured timeout/return; do not restart the stopped loop.
+
+### Related ownership correction
+Agent dispatch remains running until the worker result. STOP/close preserve
+`agent_running` and `AGENT` ownership after a timed-out join. Agent constructor
+failures now close a created Browser Use browser, and cancellation no longer
+prematurely clears the agent's running flag.
+
+### Regression tests
+`tests/test_planning_foundation.py` covers slow planning, stale results, FIFO,
+concurrent admission, bounded backlog, sync/async cancellation, shutdown,
+verification recovery, and truthful task/agent results. Existing shutdown test
+52 now asserts ownership while its deliberately stubborn fixture is alive,
+then asserts release after a successful join; its latency bound is unchanged.
